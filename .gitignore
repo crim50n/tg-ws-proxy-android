@@ -1,0 +1,29 @@
+*.iml
+.DS_Store
+
+# IDE
+.idea/
+
+# Local configuration
+local.properties
+
+# Gradle and Kotlin
+.gradle/
+.kotlin/
+build/
+app/build/
+
+# Android build artifacts
+captures/
+.externalNativeBuild/
+.cxx/
+app/release/
+*.apk
+*.aab
+
+# Signing material
+*.jks
+*.keystore
+*.p12
+*.pem
+**/signing.properties

@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Main screen -->
+    <string name="proxy_stopped">Прокси остановлен</string>
+    <string name="proxy_running">Прокси запущен</string>
+    <string name="proxy_starting">Запуск прокси…</string>
+    <string name="btn_start">Запустить</string>
+    <string name="btn_stop">Остановить</string>
+    <string name="btn_restart">Перезапустить</string>
+    <string name="open_in_telegram">Открыть в Telegram</string>
+    <string name="copy_link">Скопировать ссылку</string>
+    <string name="link_copied">Ссылка скопирована</string>
+    <string name="secret_copied">Секрет скопирован</string>
+    <string name="settings">Настройки</string>
+
+    <!-- Stats -->
+    <string name="stats_connections">Соединения</string>
+    <string name="stats_total">Всего</string>
+    <string name="stats_active">Активных</string>
+    <string name="stats_ws">WS</string>
+    <string name="stats_tcp_fallback">TCP</string>
+    <string name="stats_cf_proxy">CF</string>
+    <string name="stats_errors">Ошибок</string>
+    <string name="stats_bad">Плохих</string>
+    <string name="stats_ws_errors">Ош. WS</string>
+    <string name="stats_upload">Отпр.</string>
+    <string name="stats_download">Получ.</string>
+    <string name="stats_pool">Пул</string>
+    <string name="stats_pool_hits">Пул (хиты)</string>
+    <string name="stats_pool_misses">Пул (промахи)</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Настройки</string>
+    <string name="settings_connection">Подключение MTProto</string>
+    <string name="settings_host">IP адрес</string>
+    <string name="settings_port">Порт</string>
+    <string name="settings_secret">Секрет</string>
+    <string name="settings_regenerate_secret">Сгенерировать новый</string>
+    <string name="settings_dc_section">Датацентры Telegram (DC → IP)</string>
+    <string name="settings_dc_hint">Формат: DC:IP (по одному на строку)\nНапример: 2:149.154.167.220</string>
+    <string name="settings_cf_section">Cloudflare прокси</string>
+    <string name="settings_cf_enable">Включить CF прокси</string>
+    <string name="settings_cf_priority">Приоритет CF прокси (перед TCP)</string>
+    <string name="settings_cf_custom_domain">Свой домен</string>
+    <string name="settings_cf_domain_label">Домен</string>
+    <string name="settings_cf_test">Тест</string>
+    <string name="settings_cf_testing">Тестирование…</string>
+    <string name="settings_perf_section">Производительность</string>
+    <string name="settings_buf_size">Размер буфера (КБ)</string>
+    <string name="settings_pool_size">Размер WS пула</string>
+    <string name="settings_log_section">Логи</string>
+    <string name="settings_verbose">Подробное логирование</string>
+    <string name="settings_save">Сохранить</string>
+    <string name="settings_cancel">Отмена</string>
+    <string name="settings_saved">Настройки сохранены</string>
+    <string name="settings_restart_required">Перезапустите прокси для применения</string>
+
+    <!-- Connection info card -->
+    <string name="info_secret">Секрет</string>
+    <string name="info_link">Ссылка</string>
+
+    <!-- Validation errors -->
+    <string name="validation_host_empty">IP адрес не может быть пустым</string>
+    <string name="validation_port_range">Порт должен быть от 1 до 65535</string>
+    <string name="validation_secret_format">Секрет должен быть 32 hex символа</string>
+
+    <!-- Notification -->
+    <string name="notification_channel_name">Прокси сервис</string>
+    <string name="notification_channel_desc">Показывает статус прокси</string>
+    <string name="notification_running">Прокси работает на %1$s:%2$d</string>
+    <string name="notification_stop">Остановить</string>
+
+    <!-- Quick Settings tile -->
+    <string name="tile_active">Запущен</string>
+    <string name="tile_inactive">Остановлен</string>
+
+    <!-- CF proxy test -->
+    <string name="cf_test_fail">DC%1$d: Ошибка</string>
+    <string name="cf_test_best">Лучший домен: %1$s</string>
+    <string name="cf_test_done">Тест завершён</string>
+
+    <!-- About screen -->
+    <string name="about_title">О приложении</string>
+    <string name="about_version">Версия %1$s</string>
+    <string name="about_description">Минимальный локальный MTProto прокси для Telegram через WebSocket.</string>
+    <string name="about_based_on">На основе tg-ws-proxy от Flowseal</string>
+</resources>

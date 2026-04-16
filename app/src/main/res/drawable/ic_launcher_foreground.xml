@@ -1,0 +1,47 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!--
+        Adaptive icon safe zone: center 66x66 (21,21 to 87,87).
+        Shield centered at 54,54 — sized to fit safe zone.
+    -->
+
+    <!-- Shield outline -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="
+            M54,24
+            L78,33
+            L78,54
+            C78,69 68,79 54,84
+            C40,79 30,69 30,54
+            L30,33
+            Z"/>
+
+    <!-- Shield inner (cutout — shows blue background) -->
+    <path
+        android:fillColor="#3390EC"
+        android:pathData="
+            M54,28
+            L74,36
+            L74,54
+            C74,66.5 65.5,75.5 54,80
+            C42.5,75.5 34,66.5 34,54
+            L34,36
+            Z"/>
+
+    <!-- Lightning bolt inside shield -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="
+            M57,38
+            L47,56
+            L53,56
+            L51,72
+            L63,52
+            L56,52
+            Z"/>
+</vector>

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TG WS Proxy</string>
+
+    <!-- Main screen -->
+    <string name="proxy_stopped">Proxy stopped</string>
+    <string name="proxy_running">Proxy running</string>
+    <string name="proxy_starting">Starting proxy…</string>
+    <string name="btn_start">Start</string>
+    <string name="btn_stop">Stop</string>
+    <string name="btn_restart">Restart</string>
+    <string name="open_in_telegram">Open in Telegram</string>
+    <string name="copy_link">Copy link</string>
+    <string name="link_copied">Link copied</string>
+    <string name="secret_copied">Secret copied</string>
+    <string name="settings">Settings</string>
+
+    <!-- Stats -->
+    <string name="stats_connections">Connections</string>
+    <string name="stats_total">Total</string>
+    <string name="stats_active">Active</string>
+    <string name="stats_ws">WS</string>
+    <string name="stats_tcp_fallback">TCP</string>
+    <string name="stats_cf_proxy">CF</string>
+    <string name="stats_errors">Errors</string>
+    <string name="stats_bad">Bad</string>
+    <string name="stats_ws_errors">WS err</string>
+    <string name="stats_upload">Sent</string>
+    <string name="stats_download">Recv</string>
+    <string name="stats_pool">Pool</string>
+    <string name="stats_pool_hits">Pool (hits)</string>
+    <string name="stats_pool_misses">Pool (misses)</string>
+
+    <!-- Settings screen -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_connection">MTProto Connection</string>
+    <string name="settings_host">IP address</string>
+    <string name="settings_port">Port</string>
+    <string name="settings_secret">Secret</string>
+    <string name="settings_regenerate_secret">Regenerate secret</string>
+    <string name="settings_dc_section">Telegram Datacenters (DC → IP)</string>
+    <string name="settings_dc_hint">Format: DC:IP (one per line)\nExample: 2:149.154.167.220</string>
+    <string name="settings_cf_section">Cloudflare Proxy</string>
+    <string name="settings_cf_enable">Enable CF Proxy</string>
+    <string name="settings_cf_priority">CF Proxy priority (over TCP)</string>
+    <string name="settings_cf_custom_domain">Custom domain</string>
+    <string name="settings_cf_domain_label">Domain</string>
+    <string name="settings_cf_test">Test</string>
+    <string name="settings_cf_testing">Testing…</string>
+    <string name="settings_perf_section">Performance</string>
+    <string name="settings_buf_size">Buffer size (KB)</string>
+    <string name="settings_pool_size">WS pool size</string>
+    <string name="settings_log_section">Logs</string>
+    <string name="settings_verbose">Verbose logging</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="settings_saved">Settings saved</string>
+    <string name="settings_restart_required">Restart proxy to apply changes</string>
+
+    <!-- Connection info card -->
+    <string name="info_secret">Secret</string>
+    <string name="info_link">Link</string>
+
+    <!-- Validation errors -->
+    <string name="validation_host_empty">IP address cannot be empty</string>
+    <string name="validation_port_range">Port must be between 1 and 65535</string>
+    <string name="validation_secret_format">Secret must be 32 hex characters</string>
+
+    <!-- Notification -->
+    <string name="notification_channel_name">Proxy service</string>
+    <string name="notification_channel_desc">Shows proxy status</string>
+    <string name="notification_title">TG WS Proxy</string>
+    <string name="notification_running">Proxy running on %1$s:%2$d</string>
+    <string name="notification_stop">Stop</string>
+
+    <!-- Quick Settings tile -->
+    <string name="tile_active">Running</string>
+    <string name="tile_inactive">Stopped</string>
+
+    <!-- CF proxy test -->
+    <string name="cf_test_success">DC%1$d: OK (%2$dms)</string>
+    <string name="cf_test_fail">DC%1$d: Error</string>
+    <string name="cf_test_best">Best domain: %1$s</string>
+    <string name="cf_test_done">Test completed</string>
+
+    <!-- About screen -->
+    <string name="about_title">About</string>
+    <string name="about_version">Version %1$s</string>
+    <string name="about_description">Minimal on-device MTProto proxy for Telegram over WebSocket.</string>
+    <string name="about_based_on">Based on tg-ws-proxy by Flowseal</string>
+</resources>

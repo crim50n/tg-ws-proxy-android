@@ -1,0 +1,33 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+
+    <!--
+        Monochrome icon for statusbar and Quick Settings tile.
+        Shield is solid white, lightning bolt is cut out (transparent).
+        We achieve this by drawing the shield and then overlaying
+        the bolt area with transparent fill using fillType=evenOdd.
+    -->
+
+    <!-- Shield with lightning bolt cutout using evenOdd -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="
+            M12,2
+            L21,6
+            L21,12
+            C21,17.5 17.2,21.5 12,23
+            C6.8,21.5 3,17.5 3,12
+            L3,6
+            Z
+            M13.2,6.5
+            L8,13.5
+            L10.8,13.5
+            L9.5,19.5
+            L16,11
+            L12.8,11
+            Z"/>
+</vector>
