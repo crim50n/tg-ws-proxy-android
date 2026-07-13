@@ -7,14 +7,16 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.IBinder
+import android.os.Build
 import android.os.PowerManager
 import android.util.Log
 import kotlinx.coroutines.*
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.data.ConfigRepository
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
-import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.proxy.ProxyStats
 import dev.minios.tgwsproxy.proxy.TgWsProxyServer
 import dev.minios.tgwsproxy.ui.MainActivity
@@ -35,6 +37,9 @@ class ProxyService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var serverJob: Job? = null
     private var notificationWatchdogJob: Job? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    @Volatile private var currentNetwork: Network? = null
+    @Volatile private var hasSeenNetwork = false
     private lateinit var notificationManager: NotificationManager
 
     companion object {
@@ -44,7 +49,7 @@ class ProxyService : Service() {
 
         val isRunning: Boolean get() = instance?.server?.isRunning == true
 
-        fun start(context: Context, config: ProxyConfig) {
+        fun start(context: Context) {
             val intent = Intent(context, ProxyService::class.java)
             context.startForegroundService(intent)
         }
@@ -74,7 +79,7 @@ class ProxyService : Service() {
         }
 
         // Prevent duplicate starts
-        if (server?.isRunning == true) {
+        if (serverJob?.isActive == true) {
             Log.w(TAG, "Server already running, ignoring start command")
             return START_STICKY
         }
@@ -97,7 +102,7 @@ class ProxyService : Service() {
                 // Acquire wake lock
                 acquireWakeLock()
 
-                // #23: Start background CF domain refresh
+                // Start background CF domain refresh.
                 if (config.cfProxyEnabled) {
                     CfProxyDomains.startBackgroundRefresh()
                 }
@@ -108,6 +113,7 @@ class ProxyService : Service() {
                 // Start server
                 val srv = TgWsProxyServer(config)
                 server = srv
+                registerNetworkCallback()
                 ProxyStats.startedAtMs = System.currentTimeMillis()
                 srv.onStatusChange = { running ->
                     if (running) {
@@ -124,6 +130,7 @@ class ProxyService : Service() {
                 Log.e(TAG, "Server failed: ${e.message}", e)
             } finally {
                 stopNotificationWatchdog()
+                unregisterNetworkCallback()
                 releaseWakeLock()
                 server = null
                 Log.i(TAG, "Server job completed")
@@ -136,6 +143,7 @@ class ProxyService : Service() {
     private fun stopServerAndService() {
         Log.i(TAG, "Stopping server and service...")
         stopNotificationWatchdog()
+        unregisterNetworkCallback()
         CfProxyDomains.stopBackgroundRefresh()
         server?.stop()
         server = null
@@ -151,6 +159,7 @@ class ProxyService : Service() {
     override fun onDestroy() {
         Log.i(TAG, "Service destroying...")
         stopNotificationWatchdog()
+        unregisterNetworkCallback()
         CfProxyDomains.stopBackgroundRefresh()
         server?.stop()
         server = null
@@ -183,6 +192,41 @@ class ProxyService : Service() {
             Log.w(TAG, "WakeLock release error: ${e.message}")
         }
         wakeLock = null
+    }
+
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val connectivityManager = getSystemService(ConnectivityManager::class.java)
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                val previous = currentNetwork
+                currentNetwork = network
+                if (hasSeenNetwork && previous != network) {
+                    server?.onNetworkChanged()
+                }
+                hasSeenNetwork = true
+            }
+
+            override fun onLost(network: Network) {
+                if (currentNetwork == network) currentNetwork = null
+            }
+        }
+        try {
+            connectivityManager.registerDefaultNetworkCallback(callback)
+            networkCallback = callback
+        } catch (e: Exception) {
+            Log.w(TAG, "Unable to monitor network changes: ${e.message}")
+        }
+    }
+
+    private fun unregisterNetworkCallback() {
+        val callback = networkCallback ?: return
+        try {
+            getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(callback)
+        } catch (_: Exception) {}
+        networkCallback = null
+        currentNetwork = null
+        hasSeenNetwork = false
     }
 
     private fun startNotificationWatchdog(host: String, port: Int) {
@@ -237,7 +281,7 @@ class ProxyService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        return Notification.Builder(this, CHANNEL_ID)
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
             .setContentText(getString(R.string.notification_running, host, port))
             .setSmallIcon(R.drawable.ic_tile)
@@ -251,8 +295,10 @@ class ProxyService : Service() {
             )
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
-            .setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
-            .build().apply {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
+        }
+        return builder.build().apply {
                 flags = flags or Notification.FLAG_NO_CLEAR or Notification.FLAG_ONGOING_EVENT
             }
     }

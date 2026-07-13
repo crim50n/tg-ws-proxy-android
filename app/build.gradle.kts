@@ -16,8 +16,8 @@ android {
         applicationId = "dev.minios.tgwsproxy"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     val hasPropertiesFile = File("app/keystore/signing.properties").exists()
@@ -65,6 +65,11 @@ android {
         compose = true
         buildConfig = true
     }
+
+    lint {
+        // Compose's detector bundled with this AGP cannot read Kotlin 2.1 metadata.
+        disable += "CoroutineCreationDuringComposition"
+    }
 }
 
 dependencies {
@@ -98,6 +103,8 @@ dependencies {
 
     // OkHttp for HTTP requests (update checking, CF domain fetching)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    testImplementation("junit:junit:4.13.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

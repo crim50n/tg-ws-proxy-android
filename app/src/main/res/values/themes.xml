@@ -4,8 +4,4 @@
         <item name="android:statusBarColor">#3390EC</item>
         <item name="android:navigationBarColor">#FFFFFF</item>
     </style>
-    <style name="Theme.TgWsProxy.Dark" parent="android:Theme.Material.NoActionBar">
-        <item name="android:statusBarColor">#3390EC</item>
-        <item name="android:navigationBarColor">#1E1E1E</item>
-    </style>
 </resources>

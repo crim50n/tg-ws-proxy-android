@@ -58,7 +58,7 @@ object MtProtoConstants {
     val ALL_DCS = listOf(1, 2, 3, 4, 5, 203)
 
     /**
-     * #26: Match Python's human_bytes format exactly:
+     * Format byte counters using compact binary units.
      * - All units use 1 decimal place (including GB)
      * - Includes TB support
      * Python: for unit in ('B','KB','MB','GB'): if abs(n)<1024 return f"{n:.1f}{unit}"; n/=1024; return f"{n:.1f}TB"

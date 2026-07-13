@@ -59,7 +59,7 @@ private fun AppNavigation(viewModel: MainViewModel) {
     val stats by viewModel.stats.collectAsState()
     val cfTestResult by viewModel.cfTestResult.collectAsState()
 
-    // #22: Handle toast messages from ViewModel (save-and-restart warning)
+    // Handle transient messages from the view model.
     val context = LocalContext.current
     LaunchedEffect(Unit) {
         viewModel.toastMessage.collectLatest { message ->

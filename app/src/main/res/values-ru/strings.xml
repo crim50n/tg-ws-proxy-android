@@ -3,7 +3,6 @@
     <!-- Main screen -->
     <string name="proxy_stopped">Прокси остановлен</string>
     <string name="proxy_running">Прокси запущен</string>
-    <string name="proxy_starting">Запуск прокси…</string>
     <string name="btn_start">Запустить</string>
     <string name="btn_stop">Остановить</string>
     <string name="btn_restart">Перезапустить</string>
@@ -20,14 +19,11 @@
     <string name="stats_ws">WS</string>
     <string name="stats_tcp_fallback">TCP</string>
     <string name="stats_cf_proxy">CF</string>
-    <string name="stats_errors">Ошибок</string>
     <string name="stats_bad">Плохих</string>
     <string name="stats_ws_errors">Ош. WS</string>
     <string name="stats_upload">Отпр.</string>
     <string name="stats_download">Получ.</string>
     <string name="stats_pool">Пул</string>
-    <string name="stats_pool_hits">Пул (хиты)</string>
-    <string name="stats_pool_misses">Пул (промахи)</string>
 
     <!-- Settings screen -->
     <string name="settings_title">Настройки</string>
@@ -48,11 +44,8 @@
     <string name="settings_perf_section">Производительность</string>
     <string name="settings_buf_size">Размер буфера (КБ)</string>
     <string name="settings_pool_size">Размер WS пула</string>
-    <string name="settings_log_section">Логи</string>
-    <string name="settings_verbose">Подробное логирование</string>
     <string name="settings_save">Сохранить</string>
     <string name="settings_cancel">Отмена</string>
-    <string name="settings_saved">Настройки сохранены</string>
     <string name="settings_restart_required">Перезапустите прокси для применения</string>
 
     <!-- Connection info card -->
@@ -60,9 +53,13 @@
     <string name="info_link">Ссылка</string>
 
     <!-- Validation errors -->
-    <string name="validation_host_empty">IP адрес не может быть пустым</string>
+    <string name="validation_host_format">Введите корректный IP-адрес или имя хоста</string>
     <string name="validation_port_range">Порт должен быть от 1 до 65535</string>
     <string name="validation_secret_format">Секрет должен быть 32 hex символа</string>
+    <string name="validation_dc_format">Формат DC:IP, DC от 1 до 5 или 203, по одному на строку</string>
+    <string name="validation_domain_format">Введите корректное доменное имя</string>
+    <string name="validation_buffer_range">Буфер должен быть от 4 до 4096 КБ</string>
+    <string name="validation_pool_range">Размер пула должен быть от 0 до 16</string>
 
     <!-- Notification -->
     <string name="notification_channel_name">Прокси сервис</string>
@@ -75,6 +72,7 @@
     <string name="tile_inactive">Остановлен</string>
 
     <!-- CF proxy test -->
+    <string name="cf_test_success">DC%1$d: OK (%2$d мс)</string>
     <string name="cf_test_fail">DC%1$d: Ошибка</string>
     <string name="cf_test_best">Лучший домен: %1$s</string>
     <string name="cf_test_done">Тест завершён</string>

@@ -4,21 +4,22 @@ import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Cloudflare proxy domain management.
  * Fetches and caches domains from GitHub.
- * Matches the Python config.py implementation exactly.
+ * Follows the validated domain-pool behavior from the Python implementation.
  *
- * #23: Uses a background thread for periodic refresh (matching Python's
- * start_cfproxy_domain_refresh() with threading.Thread daemon loop).
+ * Uses a daemon thread for periodic refresh.
  */
 object CfProxyDomains {
     private const val TAG = "CfProxyDomains"
     private const val DOMAINS_URL =
         "https://raw.githubusercontent.com/Flowseal/tg-ws-proxy/main/.github/cfproxy-domains.txt"
     private const val REFRESH_INTERVAL_MS = 3600_000L // 1 hour
+    private const val MIN_VALID_DOMAINS = 3
 
     // Same encoded domains as Python _CFPROXY_ENC
     private val DEFAULT_ENCODED = listOf(
@@ -27,17 +28,30 @@ object CfProxyDomains {
         "mkuosckvso.com",
         "zaewayzmplad.com",
         "twdmbzcm.com",
+        "awzwsldi.com",
+        "clngqrflngqin.com",
+        "tjacxbqtj.com",
+        "bxaxtxmrw.com",
+        "dmohrsgmohcrwb.com",
+        "vwbmtmoi.com",
+        "khgrre.com",
+        "ulihssf.com",
+        "tmhqsdqmfpmk.com",
+        "xwuwoqbm.com",
+        "orgcnunpj.com",
+        "zhkuldz.com",
+        "zypoljnslxa.com",
+        "efabnxaowuzs.com",
+        "zaftuzsftqdq.com",
     )
 
     // Same suffix as Python _S = chr(46)+chr(99)+chr(111)+chr(46)+chr(117)+chr(107)
     private val SUFFIX = charArrayOf('.', 'c', 'o', '.', 'u', 'k').concatToString()
 
     private val domains = AtomicReference<List<String>>(decodeDefaults())
-    @Volatile
-    var activeDomain: String = decodeDefaults().random()
-        private set
+    private val activeDomains = ConcurrentHashMap<Int, String>()
 
-    // #23: Background refresh thread (matching Python _refresh_stop + threading.Thread)
+    // Background refresh thread lifecycle.
     @Volatile
     private var refreshThread: Thread? = null
     @Volatile
@@ -71,15 +85,21 @@ object CfProxyDomains {
 
     fun getDomains(): List<String> = domains.get()
 
-    /**
-     * Update the active domain (called when a different domain succeeds).
-     */
-    fun setActiveDomain(domain: String) {
-        activeDomain = domain
+    fun getDomainsForDc(dc: Int): List<String> {
+        val available = domains.get()
+        if (available.isEmpty()) return emptyList()
+        val active = activeDomains[dc]
+            ?.takeIf { it in available }
+            ?: available.random().also { activeDomains[dc] = it }
+        return listOf(active) + available.filter { it != active }.shuffled()
+    }
+
+    fun setActiveDomain(dc: Int, domain: String) {
+        if (domain in domains.get()) activeDomains[dc] = domain
     }
 
     /**
-     * #23: Start background refresh thread (matching Python start_cfproxy_domain_refresh).
+     * Start the hourly background refresh thread.
      * Refreshes immediately on start, then every hour.
      * Calling again stops the previous thread and starts a new one.
      */
@@ -148,18 +168,43 @@ object CfProxyDomains {
                         .filter { it.isNotEmpty() && !it.startsWith("#") }
 
                     // Decode each domain the same way Python does
-                    val decoded = encoded.map { decodeDomain(it) }
-                        .distinct()
+                    val decoded = normalizeDomains(encoded.map { decodeDomain(it) })
 
-                    if (decoded.isNotEmpty()) {
+                    if (decoded.size >= MIN_VALID_DOMAINS) {
                         domains.set(decoded)
-                        activeDomain = decoded.random()
+                        activeDomains.entries.removeIf { it.value !in decoded }
                         Log.i(TAG, "CF proxy domain pool updated from GitHub (${decoded.size} domains)")
+                    } else {
+                        Log.w(TAG, "Ignoring CF proxy domain update: ${decoded.size} valid domain(s)")
                     }
                 }
             }
         } catch (e: Exception) {
             Log.w(TAG, "Failed to refresh CF proxy domains: ${e.message}")
         }
+    }
+
+    internal fun normalizeDomains(items: List<String>): List<String> {
+        return items.asSequence()
+            .map { it.trim().lowercase() }
+            .filter { isValidDomain(it) }
+            .distinct()
+            .toList()
+    }
+
+    internal fun isValidDomain(domain: String): Boolean {
+        if (domain.isEmpty() || domain.length > 253 || domain.startsWith('.') || domain.endsWith('.')) {
+            return false
+        }
+        val labels = domain.split('.')
+        if (labels.size < 2) return false
+        if (labels.any { label ->
+                label.isEmpty() || label.length > 63 || label.startsWith('-') || label.endsWith('-') ||
+                        label.any { it.code > 0x7F || (!it.isLetterOrDigit() && it != '-') }
+            }) {
+            return false
+        }
+        val tld = labels.last()
+        return tld.length >= 2 && tld.any { it.isLetter() }
     }
 }

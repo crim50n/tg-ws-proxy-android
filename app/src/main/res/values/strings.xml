@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">TG WS Proxy</string>
+    <string name="app_name" translatable="false">TG WS Proxy</string>
 
     <!-- Main screen -->
     <string name="proxy_stopped">Proxy stopped</string>
     <string name="proxy_running">Proxy running</string>
-    <string name="proxy_starting">Starting proxy…</string>
     <string name="btn_start">Start</string>
     <string name="btn_stop">Stop</string>
     <string name="btn_restart">Restart</string>
@@ -22,14 +21,11 @@
     <string name="stats_ws">WS</string>
     <string name="stats_tcp_fallback">TCP</string>
     <string name="stats_cf_proxy">CF</string>
-    <string name="stats_errors">Errors</string>
     <string name="stats_bad">Bad</string>
     <string name="stats_ws_errors">WS err</string>
     <string name="stats_upload">Sent</string>
     <string name="stats_download">Recv</string>
     <string name="stats_pool">Pool</string>
-    <string name="stats_pool_hits">Pool (hits)</string>
-    <string name="stats_pool_misses">Pool (misses)</string>
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>
@@ -50,11 +46,8 @@
     <string name="settings_perf_section">Performance</string>
     <string name="settings_buf_size">Buffer size (KB)</string>
     <string name="settings_pool_size">WS pool size</string>
-    <string name="settings_log_section">Logs</string>
-    <string name="settings_verbose">Verbose logging</string>
     <string name="settings_save">Save</string>
     <string name="settings_cancel">Cancel</string>
-    <string name="settings_saved">Settings saved</string>
     <string name="settings_restart_required">Restart proxy to apply changes</string>
 
     <!-- Connection info card -->
@@ -62,14 +55,18 @@
     <string name="info_link">Link</string>
 
     <!-- Validation errors -->
-    <string name="validation_host_empty">IP address cannot be empty</string>
+    <string name="validation_host_format">Enter a valid IP address or hostname</string>
     <string name="validation_port_range">Port must be between 1 and 65535</string>
     <string name="validation_secret_format">Secret must be 32 hex characters</string>
+    <string name="validation_dc_format">Use DC:IP with DC 1–5 or 203, one per line</string>
+    <string name="validation_domain_format">Enter a valid domain name</string>
+    <string name="validation_buffer_range">Buffer must be between 4 and 4096 KB</string>
+    <string name="validation_pool_range">Pool size must be between 0 and 16</string>
 
     <!-- Notification -->
     <string name="notification_channel_name">Proxy service</string>
     <string name="notification_channel_desc">Shows proxy status</string>
-    <string name="notification_title">TG WS Proxy</string>
+    <string name="notification_title" translatable="false">TG WS Proxy</string>
     <string name="notification_running">Proxy running on %1$s:%2$d</string>
     <string name="notification_stop">Stop</string>
 

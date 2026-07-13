@@ -7,7 +7,7 @@ import java.util.concurrent.atomic.AtomicLong
  * Connection statistics tracking singleton.
  * Matches the Python _Stats implementation.
  *
- * #16: Stats are NOT reset on proxy restart — they accumulate within the app session
+ * Stats accumulate within the app process and are not reset on proxy restart.
  * (matching Python behavior where stats persist until the process exits).
  */
 object ProxyStats {
@@ -74,7 +74,7 @@ object ProxyStats {
     }
 
     /**
-     * #15: Pool format matches Python: hits/total where total = hits+misses,
+     * Pool format is hits/total where total = hits+misses,
      * or "n/a" when no pool lookups occurred.
      */
     fun formatStats(): String {

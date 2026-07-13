@@ -1,13 +1,11 @@
 package dev.minios.tgwsproxy.service
 
-import android.content.Intent
 import android.graphics.drawable.Icon
+import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import kotlinx.coroutines.*
 import dev.minios.tgwsproxy.R
-import dev.minios.tgwsproxy.data.ConfigRepository
-import dev.minios.tgwsproxy.proxy.TgWsProxyServer
 
 /**
  * Quick Settings tile for toggling the proxy on/off from the notification shade.
@@ -30,8 +28,7 @@ class ProxyTileService : TileService() {
             scope?.cancel()
             scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
             scope?.launch {
-                val config = ConfigRepository(applicationContext).getConfig()
-                ProxyService.start(applicationContext, config)
+                ProxyService.start(applicationContext)
                 // Give the service a moment to start
                 delay(500)
                 withContext(Dispatchers.Main) { updateTile() }
@@ -50,10 +47,12 @@ class ProxyTileService : TileService() {
         val running = ProxyService.isRunning
         tile.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         tile.label = getString(R.string.app_name)
-        tile.subtitle = if (running) {
-            getString(R.string.tile_active)
-        } else {
-            getString(R.string.tile_inactive)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            tile.subtitle = if (running) {
+                getString(R.string.tile_active)
+            } else {
+                getString(R.string.tile_inactive)
+            }
         }
         tile.icon = Icon.createWithResource(this, R.drawable.ic_tile)
         tile.updateTile()

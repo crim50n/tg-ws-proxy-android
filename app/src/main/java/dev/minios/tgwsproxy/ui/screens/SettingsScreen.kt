@@ -18,6 +18,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.proxy.ProxyConfig
+import dev.minios.tgwsproxy.proxy.CfProxyDomains
 import dev.minios.tgwsproxy.ui.theme.TgBlue
 import dev.minios.tgwsproxy.ui.theme.tgSwitchColors
 
@@ -43,10 +44,14 @@ fun SettingsScreen(
     var bufKb by remember(config) { mutableStateOf((config.bufferSize / 1024).toString()) }
     var poolSize by remember(config) { mutableStateOf(config.poolSize.toString()) }
 
-    // #8: Validation error states
+    // Validation error states.
     var hostError by remember { mutableStateOf<String?>(null) }
     var portError by remember { mutableStateOf<String?>(null) }
     var secretError by remember { mutableStateOf<String?>(null) }
+    var dcError by remember { mutableStateOf<String?>(null) }
+    var cfDomainError by remember { mutableStateOf<String?>(null) }
+    var bufferError by remember { mutableStateOf<String?>(null) }
+    var poolError by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
 
@@ -87,13 +92,13 @@ fun SettingsScreen(
                     }
                     Button(
                         onClick = {
-                            // #8: Validate before saving
+                            // Validate before saving.
                             var valid = true
 
                             // Validate host (must be valid IP or hostname)
                             val hostVal = host.trim()
-                            if (hostVal.isEmpty()) {
-                                hostError = context.getString(R.string.validation_host_empty)
+                            if (!ProxyConfig.isValidAddress(hostVal)) {
+                                hostError = context.getString(R.string.validation_host_format)
                                 valid = false
                             } else {
                                 hostError = null
@@ -117,18 +122,50 @@ fun SettingsScreen(
                                 secretError = null
                             }
 
+                            val parsedRedirects = ProxyConfig.parseDcRedirectsStrict(dcRedirects)
+                            if (parsedRedirects == null) {
+                                dcError = context.getString(R.string.validation_dc_format)
+                                valid = false
+                            } else {
+                                dcError = null
+                            }
+
+                            val normalizedCfDomain = cfDomain.trim().lowercase()
+                            if (cfEnabled && useCfDomain && !CfProxyDomains.isValidDomain(normalizedCfDomain)) {
+                                cfDomainError = context.getString(R.string.validation_domain_format)
+                                valid = false
+                            } else {
+                                cfDomainError = null
+                            }
+
+                            val bufferKb = bufKb.toIntOrNull()
+                            if (bufferKb == null || bufferKb !in 4..4096) {
+                                bufferError = context.getString(R.string.validation_buffer_range)
+                                valid = false
+                            } else {
+                                bufferError = null
+                            }
+
+                            val parsedPoolSize = poolSize.toIntOrNull()
+                            if (parsedPoolSize == null || parsedPoolSize !in 0..16) {
+                                poolError = context.getString(R.string.validation_pool_range)
+                                valid = false
+                            } else {
+                                poolError = null
+                            }
+
                             if (!valid) return@Button
 
                             val newConfig = ProxyConfig(
                                 host = hostVal,
                                 port = portVal!!,
                                 secret = secretVal,
-                                dcRedirects = ProxyConfig.parseDcRedirects(dcRedirects),
-                                bufferSize = (bufKb.toIntOrNull() ?: 256) * 1024,
-                                poolSize = poolSize.toIntOrNull() ?: 4,
+                                dcRedirects = parsedRedirects!!,
+                                bufferSize = bufferKb!! * 1024,
+                                poolSize = parsedPoolSize!!,
                                 cfProxyEnabled = cfEnabled,
                                 cfProxyPriority = cfPriority,
-                                cfProxyUserDomain = if (useCfDomain) cfDomain else "",
+                                cfProxyUserDomain = if (useCfDomain) normalizedCfDomain else "",
                             )
                             onSave(newConfig)
                         },
@@ -202,13 +239,15 @@ fun SettingsScreen(
 
             OutlinedTextField(
                 value = dcRedirects,
-                onValueChange = { dcRedirects = it },
+                onValueChange = { dcRedirects = it; dcError = null },
                 label = { Text("DC:IP") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 3,
                 maxLines = 6,
                 shape = RoundedCornerShape(12.dp),
                 placeholder = { Text(stringResource(R.string.settings_dc_hint)) },
+                isError = dcError != null,
+                supportingText = dcError?.let { { Text(it) } },
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -263,11 +302,13 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = cfDomain,
-                        onValueChange = { cfDomain = it },
+                        onValueChange = { cfDomain = it; cfDomainError = null },
                         label = { Text(stringResource(R.string.settings_cf_domain_label)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = RoundedCornerShape(12.dp),
+                        isError = cfDomainError != null,
+                        supportingText = cfDomainError?.let { { Text(it) } },
                     )
                 }
 
@@ -310,23 +351,27 @@ fun SettingsScreen(
 
             OutlinedTextField(
                 value = bufKb,
-                onValueChange = { bufKb = it },
+                onValueChange = { bufKb = it; bufferError = null },
                 label = { Text(stringResource(R.string.settings_buf_size)) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(12.dp),
+                isError = bufferError != null,
+                supportingText = bufferError?.let { { Text(it) } },
             )
             Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedTextField(
                 value = poolSize,
-                onValueChange = { poolSize = it },
+                onValueChange = { poolSize = it; poolError = null },
                 label = { Text(stringResource(R.string.settings_pool_size)) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 shape = RoundedCornerShape(12.dp),
+                isError = poolError != null,
+                supportingText = poolError?.let { { Text(it) } },
             )
 
             Spacer(modifier = Modifier.height(16.dp))

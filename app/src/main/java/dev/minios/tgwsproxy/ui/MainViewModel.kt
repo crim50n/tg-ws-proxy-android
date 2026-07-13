@@ -32,7 +32,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _cfTestResult = MutableStateFlow<String?>(null)
     val cfTestResult: StateFlow<String?> = _cfTestResult.asStateFlow()
 
-    // #22: Save-and-restart warning message
+    // Save-and-restart warning message.
     private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val toastMessage: SharedFlow<String> = _toastMessage.asSharedFlow()
 
@@ -54,10 +54,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startProxy() {
         if (_isRunning.value || ProxyService.isRunning) return
         val ctx = getApplication<Application>()
-        viewModelScope.launch {
-            val cfg = configRepo.getConfig()
-            ProxyService.start(ctx, cfg)
-        }
+        ProxyService.start(ctx)
     }
 
     fun stopProxy() {
@@ -71,7 +68,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             ProxyService.stop(ctx)
             _isRunning.value = false
-            // #21: Match Python's restart delay (0.3s, not 2s)
+            // Keep the restart delay short while allowing the listener to close.
             delay(300)
             startProxy()
         }
@@ -80,7 +77,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun saveConfig(newConfig: ProxyConfig) {
         viewModelScope.launch {
             configRepo.saveConfig(newConfig)
-            // #22: Show restart warning if proxy is running
+            // Show a restart warning if the proxy is running.
             if (_isRunning.value) {
                 _toastMessage.tryEmit(
                     getApplication<Application>().getString(R.string.settings_restart_required)
@@ -130,7 +127,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * #14: Test CF proxy — iterate ALL CF domains (not just active),
+     * Test every CF domain rather than only the active one,
      * test each one, find the best. Matches Python behavior where all domains
      * are tested to find working ones.
      */
@@ -188,7 +185,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             // Update active domain to the best one found
             if (bestDomain != null) {
-                CfProxyDomains.setActiveDomain(bestDomain)
+                for (dc in listOf(1, 2, 3, 4, 5)) {
+                    CfProxyDomains.setActiveDomain(dc, bestDomain)
+                }
                 results.appendLine()
                 results.appendLine(
                     getApplication<Application>().getString(R.string.cf_test_best, bestDomain)

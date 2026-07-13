@@ -3,8 +3,9 @@ package dev.minios.tgwsproxy.proxy
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
-import java.net.SocketTimeoutException
+import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
@@ -32,6 +33,9 @@ class RawWebSocket private constructor(
         private const val OPCODE_CLOSE = 0x8
         private const val OPCODE_PING = 0x9
         private const val OPCODE_PONG = 0xA
+        private const val MAX_HTTP_RESPONSE_BYTES = 32 * 1024
+        private const val MAX_FRAME_PAYLOAD = 16 * 1024 * 1024
+        private const val WS_ACCEPT_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -63,22 +67,24 @@ class RawWebSocket private constructor(
             val factory = globalSslContext.socketFactory
 
             val socket = factory.createSocket() as SSLSocket
-            socket.tcpNoDelay = true
-            socket.sendBufferSize = bufferSize
-            socket.receiveBufferSize = bufferSize
+            val clampedTimeout = connectTimeoutMs.coerceIn(1, 10000)
+            try {
+                socket.tcpNoDelay = true
+                socket.sendBufferSize = bufferSize
+                socket.receiveBufferSize = bufferSize
+                socket.soTimeout = clampedTimeout
 
-            // Set SNI hostname for TLS
-            val sslParams = socket.sslParameters
-            sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
-            socket.sslParameters = sslParams
+                // Set SNI hostname for TLS while connecting to the configured IP.
+                val sslParams = socket.sslParameters
+                sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
+                socket.sslParameters = sslParams
 
-            // Connect to the IP address (timeout clamped to max 10s, matching Python min(timeout, 10))
-            val clampedTimeout = connectTimeoutMs.coerceAtMost(10000)
-            socket.connect(InetSocketAddress(connectHost, port), clampedTimeout)
-            socket.startHandshake()
-
-            // Set soTimeout for reading HTTP response (matching Python per-line read timeout)
-            socket.soTimeout = clampedTimeout
+                socket.connect(InetSocketAddress(connectHost, port), clampedTimeout)
+                socket.startHandshake()
+            } catch (e: Exception) {
+                try { socket.close() } catch (_: Exception) {}
+                throw e
+            }
 
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
@@ -98,21 +104,20 @@ class RawWebSocket private constructor(
                 append("User-Agent: $USER_AGENT\r\n")
                 append("\r\n")
             }
-            output.write(request.toByteArray())
-            output.flush()
-
-            // Read HTTP response — close socket on timeout to prevent leaks (#4)
             val response: String
             try {
+                output.write(request.toByteArray())
+                output.flush()
                 response = readHttpResponse(input)
-            } catch (e: SocketTimeoutException) {
+            } catch (e: Exception) {
                 try { socket.close() } catch (_: Exception) {}
                 throw e
             }
 
-            val statusLine = response.lines().firstOrNull() ?: ""
+            val lines = response.lineSequence().toList()
+            val statusLine = lines.firstOrNull() ?: ""
 
-            // #5: Accept any HTTP version with status 101 (not just HTTP/1.1)
+            // Accept any HTTP version with status 101.
             val parts = statusLine.split(" ", limit = 3)
             val statusCode = if (parts.size >= 2) parts[1].toIntOrNull() ?: 0 else 0
 
@@ -123,6 +128,32 @@ class RawWebSocket private constructor(
                     .firstOrNull { it.startsWith("Location:", ignoreCase = true) }
                     ?.substringAfter(":")?.trim()
                 throw WsHandshakeError(statusCode, statusLine, location)
+            }
+
+            val headers = lines.drop(1)
+                .mapNotNull { line ->
+                    val separator = line.indexOf(':')
+                    if (separator <= 0) null else {
+                        line.substring(0, separator).trim().lowercase() to
+                                line.substring(separator + 1).trim()
+                    }
+                }
+                .groupBy({ it.first }, { it.second })
+            val expectedAccept = android.util.Base64.encodeToString(
+                MessageDigest.getInstance("SHA-1")
+                    .digest((wsKey + WS_ACCEPT_GUID).toByteArray(Charsets.US_ASCII)),
+                android.util.Base64.NO_WRAP,
+            )
+            val connectionTokens = headers["connection"]
+                .orEmpty()
+                .flatMap { it.split(',') }
+                .map { it.trim().lowercase() }
+            if (!headers["upgrade"].orEmpty().any { it.equals("websocket", ignoreCase = true) } ||
+                "upgrade" !in connectionTokens ||
+                expectedAccept !in headers["sec-websocket-accept"].orEmpty()
+            ) {
+                socket.close()
+                throw WebSocketException("Invalid WebSocket upgrade response")
             }
 
             // Clear soTimeout for the data phase — no read timeout on established connections
@@ -173,13 +204,13 @@ class RawWebSocket private constructor(
                         // Try next domain on redirect (matching Python behavior)
                         continue
                     }
-                    // #3: For CF proxy, continue trying other domains on any error
+                    // CF proxy mode can continue through the remaining domains.
                     // (matching Python's flat `except Exception` in _cfproxy_fallback).
                     // For direct WS, stop on non-redirect handshake errors.
                     if (cfProxyDomain != null) continue else break
                 } catch (e: Exception) {
                     lastError = e
-                    // #3: For CF proxy, continue trying other domains on connection errors.
+                    // Direct mode stops after connection errors; CF mode rotates.
                     // For direct WS, stop trying.
                     if (cfProxyDomain != null) continue else break
                 }
@@ -194,6 +225,9 @@ class RawWebSocket private constructor(
                 val b = input.read()
                 if (b == -1) break
                 sb.append(b.toChar())
+                if (sb.length > MAX_HTTP_RESPONSE_BYTES) {
+                    throw WebSocketException("WebSocket upgrade response too large")
+                }
                 if (prev == '\r'.code && b == '\n'.code && sb.length >= 4) {
                     val last4 = sb.substring(sb.length - 4)
                     if (last4 == "\r\n\r\n") break
@@ -208,7 +242,7 @@ class RawWebSocket private constructor(
      * Send a binary frame.
      */
     fun sendBinary(data: ByteArray) {
-        // #6: Guard against sending on closed WebSocket (matching Python)
+        // Fail before writing to an already closed socket.
         if (closed) throw IOException("WebSocket closed")
         sendFrame(OPCODE_BINARY, data)
     }
@@ -217,7 +251,7 @@ class RawWebSocket private constructor(
      * Send multiple binary frames in a batch (single flush).
      */
     fun sendBatch(frames: List<ByteArray>) {
-        // #6: Guard against sending on closed WebSocket (matching Python)
+        // Fail before writing to an already closed socket.
         if (closed) throw IOException("WebSocket closed")
         synchronized(output) {
             for (data in frames) {
@@ -232,16 +266,38 @@ class RawWebSocket private constructor(
      * Returns null if the connection is closed.
      */
     fun readBinary(): ByteArray? {
+        var fragmentedOpcode: Int? = null
+        var fragmentedPayload: ByteArrayOutputStream? = null
         while (!closed) {
             val frame = readFrame() ?: return null
             when (frame.opcode) {
-                OPCODE_BINARY, OPCODE_TEXT -> return frame.payload
+                OPCODE_BINARY, OPCODE_TEXT -> {
+                    if (fragmentedOpcode != null) {
+                        throw WebSocketException("New data frame before fragmented message completed")
+                    }
+                    if (frame.fin) return frame.payload
+                    fragmentedOpcode = frame.opcode
+                    fragmentedPayload = ByteArrayOutputStream(frame.payload.size).apply {
+                        write(frame.payload)
+                    }
+                }
+                OPCODE_CONTINUATION -> {
+                    val buffer = fragmentedPayload
+                        ?: throw WebSocketException("Unexpected WebSocket continuation frame")
+                    if (buffer.size() + frame.payload.size > MAX_FRAME_PAYLOAD) {
+                        throw WebSocketException("Fragmented WebSocket message too large")
+                    }
+                    buffer.write(frame.payload)
+                    if (frame.fin) {
+                        fragmentedOpcode = null
+                        fragmentedPayload = null
+                        return buffer.toByteArray()
+                    }
+                }
                 OPCODE_PING -> sendFrame(OPCODE_PONG, frame.payload)
                 OPCODE_CLOSE -> {
-                    // #2: Set closed flag (matching Python self._closed = True)
                     closed = true
-                    // #27: Echo only first 2 bytes of close payload (status code),
-                    // matching Python's payload[:2]
+                    // Echo only the close status code.
                     try {
                         val closePayload = if (frame.payload.size >= 2) {
                             frame.payload.copyOf(2)
@@ -288,8 +344,7 @@ class RawWebSocket private constructor(
         }
     }
 
-    // #10: Build complete frame (header + masked payload) as single ByteArray
-    // and write in one call (matching Python's _build_frame returning a single bytes object).
+    // Build the complete frame as one array to keep it in a single socket write.
     // With tcpNoDelay=true, two writes would produce two TCP segments.
     private fun writeFrame(opcode: Int, data: ByteArray) {
         val mask = ByteArray(4).also { random.nextBytes(it) }
@@ -353,7 +408,6 @@ class RawWebSocket private constructor(
         try {
             val b0 = input.read()
             if (b0 == -1) {
-                // #24: Set closed on EOF (matching Python IncompleteReadError behavior)
                 closed = true
                 return null
             }
@@ -364,7 +418,14 @@ class RawWebSocket private constructor(
             }
 
             val opcode = b0 and 0x0F
+            val fin = (b0 and 0x80) != 0
+            if ((b0 and 0x70) != 0) {
+                throw WebSocketException("Unsupported WebSocket RSV bits")
+            }
             val masked = (b1 and 0x80) != 0
+            if (masked) {
+                throw WebSocketException("Masked server WebSocket frame")
+            }
             var payloadLen = (b1 and 0x7F).toLong()
 
             if (payloadLen == 126L) {
@@ -383,25 +444,25 @@ class RawWebSocket private constructor(
                         closed = true
                         return null
                     }
+                    if (i == 0 && (b and 0x80) != 0) {
+                        throw WebSocketException("Invalid WebSocket payload length")
+                    }
                     len = (len shl 8) or b.toLong()
                 }
                 payloadLen = len
             }
 
-            val mask = if (masked) {
-                val m = ByteArray(4)
-                readFully(input, m)
-                m
-            } else null
+            if (payloadLen > MAX_FRAME_PAYLOAD) {
+                throw WebSocketException("WebSocket frame too large: $payloadLen")
+            }
+            val isControl = opcode >= OPCODE_CLOSE
+            if (isControl && (!fin || payloadLen > 125)) {
+                throw WebSocketException("Invalid WebSocket control frame")
+            }
 
             val payload = ByteArray(payloadLen.toInt())
             readFully(input, payload)
-
-            if (mask != null) {
-                val unmasked = xorMask(payload, mask)
-                return WsFrame(opcode, unmasked)
-            }
-            return WsFrame(opcode, payload)
+            return WsFrame(fin, opcode, payload)
         } catch (e: Exception) {
             if (!closed) throw e
             return null
@@ -445,7 +506,7 @@ class RawWebSocket private constructor(
         return result
     }
 
-    private data class WsFrame(val opcode: Int, val payload: ByteArray) {
+    private data class WsFrame(val fin: Boolean, val opcode: Int, val payload: ByteArray) {
         override fun equals(other: Any?): Boolean = this === other
         override fun hashCode(): Int = System.identityHashCode(this)
     }

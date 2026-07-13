@@ -37,14 +37,14 @@ class ConfigRepository(private val context: Context) {
         val existing = runBlocking {
             context.dataStore.data.first()[Keys.SECRET]
         }
-        if (existing != null) {
+        if (existing?.matches(Regex("^[0-9a-fA-F]{32}$")) == true) {
             existing
         } else {
             val generated = ProxyConfig.generateSecret()
             runBlocking {
                 context.dataStore.edit { prefs ->
-                    // Double-check: another thread might have written it
-                    if (prefs[Keys.SECRET] == null) {
+                    val current = prefs[Keys.SECRET]
+                    if (current?.matches(Regex("^[0-9a-fA-F]{32}$")) != true) {
                         prefs[Keys.SECRET] = generated
                     }
                 }
@@ -59,15 +59,21 @@ class ConfigRepository(private val context: Context) {
     val configFlow: Flow<ProxyConfig> = context.dataStore.data.map { prefs ->
         ProxyConfig(
             host = prefs[Keys.HOST] ?: "127.0.0.1",
-            port = prefs[Keys.PORT] ?: 1443,
-            secret = prefs[Keys.SECRET] ?: stableSecret,
+            port = (prefs[Keys.PORT] ?: 1443).coerceIn(1, 65535),
+            secret = prefs[Keys.SECRET]
+                ?.takeIf { it.matches(Regex("^[0-9a-fA-F]{32}$")) }
+                ?: stableSecret,
             dcRedirects = prefs[Keys.DC_REDIRECTS]?.let { deserializeDcRedirects(it) }
                 ?: ProxyConfig().dcRedirects,
-            bufferSize = (prefs[Keys.BUFFER_SIZE] ?: 256) * 1024,
-            poolSize = prefs[Keys.POOL_SIZE] ?: 4,
+            bufferSize = (prefs[Keys.BUFFER_SIZE] ?: 256).coerceIn(4, 4096) * 1024,
+            poolSize = (prefs[Keys.POOL_SIZE] ?: 4).coerceIn(0, 16),
             cfProxyEnabled = prefs[Keys.CF_PROXY_ENABLED] ?: true,
             cfProxyPriority = prefs[Keys.CF_PROXY_PRIORITY] ?: true,
-            cfProxyUserDomain = prefs[Keys.CF_PROXY_USER_DOMAIN] ?: "",
+            cfProxyUserDomain = prefs[Keys.CF_PROXY_USER_DOMAIN]
+                ?.trim()
+                ?.lowercase()
+                ?.takeIf { dev.minios.tgwsproxy.proxy.CfProxyDomains.isValidDomain(it) }
+                ?: "",
         )
     }
 
@@ -103,7 +109,10 @@ class ConfigRepository(private val context: Context) {
             val parts = entry.split(":", limit = 2)
             if (parts.size == 2) {
                 val dc = parts[0].toIntOrNull() ?: continue
-                result[dc] = parts[1]
+                val address = parts[1].trim()
+                if (dc in setOf(1, 2, 3, 4, 5, 203) && ProxyConfig.isValidAddress(address)) {
+                    result[dc] = address
+                }
             }
         }
         return result

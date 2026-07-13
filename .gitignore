@@ -27,3 +27,7 @@ app/release/
 *.p12
 *.pem
 **/signing.properties
+
+# Local research and repository guidance
+/AGENTS.md
+/*.tar.gz

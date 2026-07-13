@@ -22,6 +22,9 @@ class TgWsProxyServer(
     private var config: ProxyConfig,
 ) {
     private val running = AtomicBoolean(false)
+    private val listening = AtomicBoolean(false)
+    private val stopRequested = AtomicBoolean(false)
+    @Volatile
     private var serverSocket: ServerSocket? = null
     private var wsPool: WsPool? = null
     private var scope: CoroutineScope? = null
@@ -32,29 +35,41 @@ class TgWsProxyServer(
     private val badHandshakeCount = AtomicLong(0)
     private var lastBadHandshakeLog = 0L
 
-    // #13: Track in-flight client handler jobs for graceful shutdown
+    // Track active handlers and sockets for deterministic shutdown.
     private val clientJobs = ConcurrentHashMap.newKeySet<Job>()
+    private val clientSockets = ConcurrentHashMap.newKeySet<Socket>()
 
-    val isRunning: Boolean get() = running.get()
+    val isRunning: Boolean get() = listening.get()
 
     var onStatusChange: ((Boolean) -> Unit)? = null
 
     fun updateConfig(newConfig: ProxyConfig) {
         config = newConfig
-        // #20: Update pool redirects dynamically
         wsPool?.updateRedirects(newConfig.dcRedirects)
+    }
+
+    fun onNetworkChanged() {
+        if (!isRunning) return
+        Log.i(TAG, "Network changed, rebuilding WebSocket pool")
+        Bridge.resetState()
+        wsPool?.resetAndWarm(config.dcRedirects)
     }
 
     /**
      * Start the proxy server. Blocks until stopped.
      */
     suspend fun start() = withContext(Dispatchers.IO) {
-        if (running.getAndSet(true)) {
+        if (stopRequested.get() || running.getAndSet(true)) {
             Log.w(TAG, "Server already running")
             return@withContext
         }
+        if (stopRequested.get()) {
+            running.set(false)
+            cleanup()
+            return@withContext
+        }
 
-        // #16: Only reset active connections on restart, not all stats
+        // Historical stats remain process-wide; only active state is reset.
         ProxyStats.resetActive()
         badHandshakeCount.set(0)
         lastBadHandshakeLog = 0L
@@ -63,20 +78,17 @@ class TgWsProxyServer(
 
         try {
             // Initialize WS pool
-            // #20: Pool no longer takes dcRedirects in constructor
             wsPool = WsPool(
                 poolSize = config.poolSize,
                 bufferSize = config.bufferSize,
             ).also {
                 it.start(scope!!)
-                // #20: Pass dcRedirects dynamically via warmUp
                 it.warmUp(config.dcRedirects)
             }
 
-            // #23: CF domain refresh is now handled by CfProxyDomains.startBackgroundRefresh()
-            // (started by ProxyService), not by an inline coroutine here.
+            // CF domain refresh is owned by ProxyService.
 
-            // #12: Stats logging includes WS blacklist summary
+            // Include the current direct-WS blacklist in periodic stats.
             statsJob = scope!!.launch {
                 while (isActive) {
                     delay(60_000)
@@ -90,8 +102,12 @@ class TgWsProxyServer(
             ss.soTimeout = 0
             ss.bind(InetSocketAddress(config.host, config.port))
             serverSocket = ss
+            if (stopRequested.get() || !running.get()) {
+                ss.close()
+                return@withContext
+            }
+            listening.set(true)
 
-            // #25: Detailed startup banner matching Python
             logStartupBanner()
 
             onStatusChange?.invoke(true)
@@ -103,13 +119,16 @@ class TgWsProxyServer(
                     clientSocket.tcpNoDelay = true
                     clientSocket.sendBufferSize = config.bufferSize
                     clientSocket.receiveBufferSize = config.bufferSize
+                    clientSockets.add(clientSocket)
 
                     val job = scope!!.launch {
                         handleClient(clientSocket)
                     }
-                    // #13: Track the job for graceful shutdown
                     clientJobs.add(job)
-                    job.invokeOnCompletion { clientJobs.remove(job) }
+                    job.invokeOnCompletion {
+                        clientJobs.remove(job)
+                        clientSockets.remove(clientSocket)
+                    }
                 } catch (e: Exception) {
                     if (running.get()) {
                         Log.e(TAG, "Accept error: ${e.message}")
@@ -129,7 +148,8 @@ class TgWsProxyServer(
      * Stop the proxy server and wait for cleanup.
      */
     fun stop() {
-        if (!running.getAndSet(false)) return
+        stopRequested.set(true)
+        val wasRunning = running.getAndSet(false)
 
         Log.i(TAG, "Stopping proxy server...")
 
@@ -140,20 +160,22 @@ class TgWsProxyServer(
 
         cleanup()
 
-        // Wait for the server loop to finish (max 3 seconds)
-        try {
-            stoppedLatch.await(3, TimeUnit.SECONDS)
-        } catch (_: Exception) {}
+        if (wasRunning) {
+            // Wait for the server loop to finish (max 3 seconds)
+            try {
+                stoppedLatch.await(3, TimeUnit.SECONDS)
+            } catch (_: Exception) {}
+        }
 
         Log.i(TAG, "Proxy server stopped. ${ProxyStats.formatStats()}")
     }
 
     /**
-     * #13: Graceful shutdown — give in-flight connections a grace period
-     * before cancelling. Python relies on asyncio.run() teardown which
-     * cancels all tasks, but existing connections finish their current I/O.
+     * Close active sockets before cancelling handlers so blocking reads unblock.
      */
+    @Synchronized
     private fun cleanup() {
+        val wasListening = listening.getAndSet(false)
         statsJob?.cancel()
         statsJob = null
         wsPool?.stop()
@@ -164,29 +186,35 @@ class TgWsProxyServer(
         } catch (_: Exception) {}
         serverSocket = null
 
-        // #13: Give in-flight handlers a brief grace period, then cancel scope
+        // Closing sockets interrupts blocking Java reads before coroutine cancellation.
         if (clientJobs.isNotEmpty()) {
-            Log.i(TAG, "Waiting for ${clientJobs.size} active connection(s) to finish...")
-            // Give 2 seconds grace, then cancel
-            Thread.sleep(500)
+            Log.i(TAG, "Closing ${clientJobs.size} active connection(s)...")
+            clientSockets.forEach { socket ->
+                try { socket.close() } catch (_: Exception) {}
+            }
+            runBlocking {
+                withTimeoutOrNull(2_000) {
+                    clientJobs.toList().joinAll()
+                }
+            }
         }
 
         scope?.cancel()
         scope = null
         clientJobs.clear()
+        clientSockets.clear()
 
-        onStatusChange?.invoke(false)
+        if (wasListening) onStatusChange?.invoke(false)
     }
 
     /**
-     * #25: Detailed startup banner matching Python's output.
+     * Log non-sensitive startup configuration.
      */
     private fun logStartupBanner() {
         val sep = "=" .repeat(60)
         Log.i(TAG, sep)
         Log.i(TAG, "  Telegram MTProto WS Bridge Proxy")
         Log.i(TAG, "  Listening on   ${config.host}:${config.port}")
-        Log.i(TAG, "  Secret:        ${config.secret}")
         Log.i(TAG, "  Target DC IPs:")
         for (dc in config.dcRedirects.keys.sorted()) {
             Log.i(TAG, "    DC$dc: ${config.dcRedirects[dc]}")
@@ -196,9 +224,6 @@ class TgWsProxyServer(
             val domainType = if (config.cfProxyUserDomain.isNotBlank()) "user" else "auto"
             Log.i(TAG, "  CF proxy:      enabled ($prio | $domainType)")
         }
-        Log.i(TAG, sep)
-        Log.i(TAG, "  Connect links:")
-        Log.i(TAG, "    dd (random padding):  ${config.proxyLink()}")
         Log.i(TAG, sep)
     }
 
@@ -224,7 +249,7 @@ class TgWsProxyServer(
             while (read < initData.size) {
                 val n = input.read(initData, read, initData.size - read)
                 if (n <= 0) {
-                    // #17: Early disconnect before full handshake — NOT a bad handshake,
+                    // Early disconnect before the full handshake is not a bad handshake,
                     // just log debug. Python does NOT increment connections_bad here.
                     if (globalVerbose) {
                         Log.d(TAG, "Client disconnected before handshake: $clientAddr")
@@ -240,7 +265,7 @@ class TgWsProxyServer(
             // Parse handshake
             val handshake = MtProtoCrypto.parseHandshake(initData, config.secretBytes())
             if (handshake == null) {
-                // #17: Only count crypto-failed handshakes as "bad" (wrong secret/proto).
+                // Count only crypto/protocol failures as bad handshakes.
                 // This is where Python increments connections_bad.
                 val count = badHandshakeCount.incrementAndGet()
                 val now = System.currentTimeMillis()
@@ -277,7 +302,6 @@ class TgWsProxyServer(
                 telegramEncryptor = relayInit.telegramEncryptor,
             )
 
-            // Connect upstream (now passes protoTag and relayInit for MsgSplitter and blacklisting)
             val upstream = Bridge.connectUpstream(
                 dc = absDc,
                 isMedia = isMedia,
@@ -291,7 +315,6 @@ class TgWsProxyServer(
                 Log.d(TAG, "Upstream connected: ${upstream.type} for DC $absDc from $clientAddr")
             }
 
-            // Run bridge (now passes protoTag for MsgSplitter)
             try {
                 Bridge.bridgeReencrypt(
                     clientInput = input,
@@ -307,7 +330,7 @@ class TgWsProxyServer(
             }
 
         } catch (e: java.net.SocketTimeoutException) {
-            // #17: Handshake timeout — NOT a bad handshake (client just timed out).
+            // A handshake timeout is not a cryptographic failure.
             // Python does NOT increment connections_bad here.
             if (globalVerbose) {
                 Log.d(TAG, "Handshake timeout: $clientAddr")

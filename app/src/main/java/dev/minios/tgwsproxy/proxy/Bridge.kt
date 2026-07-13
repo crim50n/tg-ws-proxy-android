@@ -7,6 +7,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "Bridge"
@@ -29,6 +30,7 @@ object Bridge {
     private const val WS_FAIL_TIMEOUT_MS = 2_000
     private const val WS_NORMAL_TIMEOUT_MS = 10_000
     private const val TCP_CONNECT_TIMEOUT_MS = 10_000
+    private const val DIRECT_IP_FAIL_COOLDOWN_MS = 60 * 60_000L
 
     enum class UpstreamType { WEBSOCKET, CFPROXY, TCP }
 
@@ -37,6 +39,7 @@ object Bridge {
 
     // DC fail cooldown: timestamp until which WS timeout is reduced
     private val dcFailUntil = ConcurrentHashMap<String, Long>()
+    private val directIpFailUntil = ConcurrentHashMap<String, Long>()
 
     /**
      * Reset blacklist and cooldown state (called on server restart).
@@ -44,6 +47,7 @@ object Bridge {
     fun resetState() {
         wsBlacklist.clear()
         dcFailUntil.clear()
+        directIpFailUntil.clear()
     }
 
     /**
@@ -100,6 +104,12 @@ object Bridge {
 
         // Determine WS timeout (adaptive, like Python)
         val now = System.currentTimeMillis()
+        val ipFailUntil = directIpFailUntil[targetIp] ?: 0L
+        if (config.cfProxyEnabled && now < ipFailUntil) {
+            Log.i(TAG, "Direct WS IP $targetIp is cooling down -> fallback")
+            val conn = doFallback(dc, isMedia, config, protoTag, relayInit)
+            if (conn != null) return@withContext conn
+        }
         val failUntil = dcFailUntil[dcKey] ?: 0L
         val wsTimeout = if (now < failUntil) WS_FAIL_TIMEOUT_MS else WS_NORMAL_TIMEOUT_MS
 
@@ -110,6 +120,7 @@ object Bridge {
             ProxyStats.connectionsWs.incrementAndGet()
             if (TgWsProxyServer.globalVerbose) Log.d(TAG, "Pool hit for DC$dc$mediaTag")
             dcFailUntil.remove(dcKey)
+            directIpFailUntil.remove(targetIp)
             return@withContext UpstreamConnection(UpstreamType.WEBSOCKET, ws = pooledWs)
         }
         ProxyStats.poolMisses.incrementAndGet()
@@ -138,6 +149,11 @@ object Bridge {
                 allRedirects = false
                 Log.w(TAG, "DC$dc$mediaTag WS handshake: ${e.statusLine}")
             }
+        } catch (e: SocketTimeoutException) {
+            ProxyStats.wsErrors.incrementAndGet()
+            allRedirects = false
+            directIpFailUntil[targetIp] = now + DIRECT_IP_FAIL_COOLDOWN_MS
+            Log.w(TAG, "DC$dc$mediaTag WS timeout via $targetIp; IP cooldown enabled")
         } catch (e: Exception) {
             ProxyStats.wsErrors.incrementAndGet()
             allRedirects = false
@@ -147,6 +163,7 @@ object Bridge {
         // WS success
         if (ws != null) {
             dcFailUntil.remove(dcKey)
+            directIpFailUntil.remove(targetIp)
             ProxyStats.connectionsWs.incrementAndGet()
             return@withContext UpstreamConnection(UpstreamType.WEBSOCKET, ws = ws)
         }
@@ -221,16 +238,16 @@ object Bridge {
         config: ProxyConfig,
     ): UpstreamConnection? {
         val mediaTag = if (isMedia) " media" else ""
-        val allDomains = config.getAllCfDomains()
+        val allDomains = if (config.cfProxyUserDomain.isNotBlank()) {
+            listOf(config.cfProxyUserDomain)
+        } else {
+            CfProxyDomains.getDomainsForDc(dc)
+        }
         if (allDomains.isEmpty()) return null
-
-        val active = config.getActiveCfDomain() ?: allDomains.first()
-        val others = allDomains.filter { it != active }
-        val orderedDomains = listOf(active) + others
 
         Log.i(TAG, "DC$dc$mediaTag -> trying CF proxy")
 
-        for (baseDomain in orderedDomains) {
+        for (baseDomain in allDomains) {
             try {
                 val ws = RawWebSocket.connectToDc(
                     dc = dc,
@@ -240,11 +257,7 @@ object Bridge {
                     cfProxyDomain = baseDomain,
                     connectTimeoutMs = WS_NORMAL_TIMEOUT_MS,
                 )
-                // Success! Update sticky active domain if it changed
-                if (baseDomain != CfProxyDomains.activeDomain) {
-                    Log.i(TAG, "Switching active CF domain to $baseDomain")
-                    CfProxyDomains.setActiveDomain(baseDomain)
-                }
+                CfProxyDomains.setActiveDomain(dc, baseDomain)
                 ProxyStats.connectionsCfProxy.incrementAndGet()
                 return UpstreamConnection(UpstreamType.CFPROXY, ws = ws)
             } catch (e: Exception) {
@@ -276,7 +289,7 @@ object Bridge {
      * For WS/CF upstream: uses MsgSplitter to split TCP data into individual
      * MTProto transport packets, each sent as a separate WS frame (matching Python).
      *
-     * #7: Tracks per-session stats (up/down bytes/packets, duration) and logs summary
+     * Tracks per-session traffic and duration and logs a summary on close.
      * on close (matching Python bridge.py:298-303).
      */
     suspend fun bridgeReencrypt(
@@ -288,7 +301,7 @@ object Bridge {
         bufferSize: Int,
         protoTag: Int,
     ) = coroutineScope {
-        // #7: Per-session stats (matching Python)
+        // Per-session traffic statistics.
         val startTime = System.currentTimeMillis()
         var upBytes = 0L
         var downBytes = 0L
@@ -318,7 +331,7 @@ object Bridge {
             }
         } else null
 
-        // #19: Cache output stream reference for TCP upstream
+        // Cache the TCP output stream for the session.
         val tcpOutput = if (upstream.type == UpstreamType.TCP) {
             upstream.tcpSocket!!.getOutputStream()
         } else null
@@ -422,7 +435,7 @@ object Bridge {
             clientToUpstream.cancel()
             upstreamToClient.cancel()
 
-            // #7: Log per-session summary (matching Python bridge.py:298-303)
+            // Log a compact per-session summary.
             val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
             Log.i(TAG, "Session: ${upstream.type} %.1fs up=%s(%d) down=%s(%d)".format(
                 elapsed,

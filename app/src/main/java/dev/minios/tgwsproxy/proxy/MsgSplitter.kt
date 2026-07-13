@@ -14,6 +14,10 @@ class MsgSplitter(
     protoTag: Int,
     relayInit: ByteArray,
 ) {
+    companion object {
+        internal const val MAX_PACKET_SIZE = 16 * 1024 * 1024
+    }
+
     // Shadow decryptor — same key derivation as relay encryptor,
     // fast-forwarded past the 64-byte init (matching Python)
     private val shadowDecryptor: AesCtr
@@ -46,29 +50,36 @@ class MsgSplitter(
         if (chunk.isEmpty()) return emptyList()
         if (disabled) return listOf(chunk)
 
-        // Append to buffers
-        cipherBuf = cipherBuf + chunk
-        plainBuf = plainBuf + shadowDecryptor.update(chunk)
+        cipherBuf = append(cipherBuf, chunk)
+        plainBuf = append(plainBuf, shadowDecryptor.update(chunk))
 
         val parts = mutableListOf<ByteArray>()
-        while (cipherBuf.isNotEmpty()) {
-            val packetLen = nextPacketLen()
+        var offset = 0
+        while (offset < cipherBuf.size) {
+            val packetLen = nextPacketLen(offset)
             if (packetLen == null) {
                 // Not enough data yet — wait for more
                 break
             }
             if (packetLen <= 0) {
                 // Unrecognized protocol — send remaining as single chunk, disable splitting
-                parts.add(cipherBuf.copyOf())
+                parts.add(cipherBuf.copyOfRange(offset, cipherBuf.size))
                 cipherBuf = ByteArray(0)
                 plainBuf = ByteArray(0)
                 disabled = true
-                break
+                return parts
             }
             // Extract one complete packet
-            parts.add(cipherBuf.copyOfRange(0, packetLen))
-            cipherBuf = cipherBuf.copyOfRange(packetLen, cipherBuf.size)
-            plainBuf = plainBuf.copyOfRange(packetLen, plainBuf.size)
+            parts.add(cipherBuf.copyOfRange(offset, offset + packetLen))
+            offset += packetLen
+        }
+
+        if (offset > 0) {
+            cipherBuf = cipherBuf.copyOfRange(offset, cipherBuf.size)
+            plainBuf = plainBuf.copyOfRange(offset, plainBuf.size)
+        }
+        if (cipherBuf.size > MAX_PACKET_SIZE + 4) {
+            throw ProxyException("MTProto splitter buffer too large")
         }
         return parts
     }
@@ -89,12 +100,12 @@ class MsgSplitter(
      * Returns null if not enough data, 0 if protocol is unknown (disable splitting),
      * or the packet length in bytes.
      */
-    private fun nextPacketLen(): Int? {
-        if (plainBuf.isEmpty()) return null
+    private fun nextPacketLen(offset: Int): Int? {
+        if (offset >= plainBuf.size) return null
         return when (proto) {
-            MtProtoConstants.TAG_ABRIDGED -> nextAbridgedLen()
+            MtProtoConstants.TAG_ABRIDGED -> nextAbridgedLen(offset)
             MtProtoConstants.TAG_INTERMEDIATE,
-            MtProtoConstants.TAG_PADDED_INTERMEDIATE -> nextIntermediateLen()
+            MtProtoConstants.TAG_PADDED_INTERMEDIATE -> nextIntermediateLen(offset)
             else -> 0 // Unknown protocol, disable splitting
         }
     }
@@ -104,16 +115,16 @@ class MsgSplitter(
      * First byte: if < 0x7F, payload length = byte * 4 (header = 1 byte)
      *             if 0x7F or 0xFF, next 3 bytes = LE length * 4 (header = 4 bytes)
      */
-    private fun nextAbridgedLen(): Int? {
-        val first = plainBuf[0].toInt() and 0xFF
+    private fun nextAbridgedLen(offset: Int): Int? {
+        val first = plainBuf[offset].toInt() and 0xFF
         val headerLen: Int
         val payloadLen: Int
 
         if (first == 0x7F || first == 0xFF) {
-            if (plainBuf.size < 4) return null
-            payloadLen = ((plainBuf[1].toInt() and 0xFF) or
-                    ((plainBuf[2].toInt() and 0xFF) shl 8) or
-                    ((plainBuf[3].toInt() and 0xFF) shl 16)) * 4
+            if (plainBuf.size - offset < 4) return null
+            payloadLen = ((plainBuf[offset + 1].toInt() and 0xFF) or
+                    ((plainBuf[offset + 2].toInt() and 0xFF) shl 8) or
+                    ((plainBuf[offset + 3].toInt() and 0xFF) shl 16)) * 4
             headerLen = 4
         } else {
             payloadLen = (first and 0x7F) * 4
@@ -121,19 +132,33 @@ class MsgSplitter(
         }
 
         if (payloadLen <= 0) return 0
+        if (payloadLen > MAX_PACKET_SIZE) {
+            throw ProxyException("MTProto packet too large: $payloadLen")
+        }
         val packetLen = headerLen + payloadLen
-        return if (plainBuf.size < packetLen) null else packetLen
+        return if (plainBuf.size - offset < packetLen) null else packetLen
     }
 
     /**
      * Parse intermediate protocol length header.
      * First 4 bytes = LE uint32, masked with 0x7FFFFFFF = payload length.
      */
-    private fun nextIntermediateLen(): Int? {
-        if (plainBuf.size < 4) return null
-        val payloadLen = (MtProtoCrypto.readInt32LE(plainBuf, 0).toLong() and 0x7FFFFFFFL).toInt()
+    private fun nextIntermediateLen(offset: Int): Int? {
+        if (plainBuf.size - offset < 4) return null
+        val payloadLen = MtProtoCrypto.readInt32LE(plainBuf, offset).toLong() and 0x7FFFFFFFL
         if (payloadLen <= 0) return 0
-        val packetLen = 4 + payloadLen
-        return if (plainBuf.size < packetLen) null else packetLen
+        if (payloadLen > MAX_PACKET_SIZE) {
+            throw ProxyException("MTProto packet too large: $payloadLen")
+        }
+        val packetLen = 4 + payloadLen.toInt()
+        return if (plainBuf.size - offset < packetLen) null else packetLen
+    }
+
+    private fun append(current: ByteArray, chunk: ByteArray): ByteArray {
+        if (current.isEmpty()) return chunk.copyOf()
+        return ByteArray(current.size + chunk.size).also {
+            System.arraycopy(current, 0, it, 0, current.size)
+            System.arraycopy(chunk, 0, it, current.size, chunk.size)
+        }
     }
 }
