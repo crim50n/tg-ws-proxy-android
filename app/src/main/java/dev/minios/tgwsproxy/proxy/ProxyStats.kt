@@ -5,10 +5,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Connection statistics tracking singleton.
- * Matches the Python _Stats implementation.
- *
- * Stats accumulate within the app process and are not reset on proxy restart.
- * (matching Python behavior where stats persist until the process exits).
+ * Counters describe the current proxy run and reset on each start or restart.
  */
 object ProxyStats {
     val connectionsTotal = AtomicInteger(0)
@@ -27,18 +24,6 @@ object ProxyStats {
     @Volatile
     var startedAtMs: Long = 0L
 
-    /**
-     * Reset only the active connections counter (called on restart).
-     * Other counters accumulate across restarts within the app session (#16).
-     */
-    fun resetActive() {
-        connectionsActive.set(0)
-        startedAtMs = System.currentTimeMillis()
-    }
-
-    /**
-     * Full reset — only called when the app is first launched or explicitly requested.
-     */
     fun resetAll() {
         connectionsTotal.set(0)
         connectionsActive.set(0)

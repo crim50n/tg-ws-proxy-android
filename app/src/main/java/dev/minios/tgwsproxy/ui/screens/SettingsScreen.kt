@@ -17,6 +17,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
+import dev.minios.tgwsproxy.diagnostics.DiagnosticState
+import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
 import dev.minios.tgwsproxy.ui.theme.TgBlue
@@ -27,11 +29,16 @@ import dev.minios.tgwsproxy.ui.theme.tgSwitchColors
 fun SettingsScreen(
     config: ProxyConfig,
     cfTestResult: String?,
+    diagnosticState: DiagnosticState,
     onSave: (ProxyConfig) -> Unit,
     onBack: () -> Unit,
     onRegenerateSecret: () -> String,
+    onCopySecret: (String) -> Unit,
     onTestCfProxy: () -> Unit,
-    onClearCfTestResult: () -> Unit,
+    onStartDiagnostics: () -> Unit,
+    onStopDiagnostics: () -> Unit,
+    onExportDiagnostics: () -> Unit,
+    onClearDiagnostics: () -> Unit,
 ) {
     var host by remember(config) { mutableStateOf(config.host) }
     var port by remember(config) { mutableStateOf(config.port.toString()) }
@@ -43,6 +50,7 @@ fun SettingsScreen(
     var useCfDomain by remember(config) { mutableStateOf(config.cfProxyUserDomain.isNotBlank()) }
     var bufKb by remember(config) { mutableStateOf((config.bufferSize / 1024).toString()) }
     var poolSize by remember(config) { mutableStateOf(config.poolSize.toString()) }
+    var showDetailedStats by remember(config) { mutableStateOf(config.showDetailedStats) }
 
     // Validation error states.
     var hostError by remember { mutableStateOf<String?>(null) }
@@ -62,7 +70,10 @@ fun SettingsScreen(
                 title = { Text(stringResource(R.string.settings_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.navigate_back),
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -74,6 +85,7 @@ fun SettingsScreen(
         },
         bottomBar = {
             Surface(
+                modifier = Modifier.imePadding(),
                 shadowElevation = 8.dp,
                 color = MaterialTheme.colorScheme.surface,
             ) {
@@ -166,6 +178,7 @@ fun SettingsScreen(
                                 cfProxyEnabled = cfEnabled,
                                 cfProxyPriority = cfPriority,
                                 cfProxyUserDomain = if (useCfDomain) normalizedCfDomain else "",
+                                showDetailedStats = showDetailedStats,
                             )
                             onSave(newConfig)
                         },
@@ -225,8 +238,22 @@ fun SettingsScreen(
                 isError = secretError != null,
                 supportingText = secretError?.let { { Text(it) } },
                 trailingIcon = {
-                    IconButton(onClick = { secret = onRegenerateSecret(); secretError = null }) {
-                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.settings_regenerate_secret))
+                    Row {
+                        IconButton(
+                            onClick = { onCopySecret(secret.trim()) },
+                            enabled = secret.trim().matches(Regex("^[0-9a-fA-F]{32}$")),
+                        ) {
+                            Icon(
+                                Icons.Default.ContentCopy,
+                                contentDescription = stringResource(R.string.settings_copy_secret),
+                            )
+                        }
+                        IconButton(onClick = { secret = onRegenerateSecret(); secretError = null }) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = stringResource(R.string.settings_regenerate_secret),
+                            )
+                        }
                     }
                 },
             )
@@ -240,7 +267,7 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = dcRedirects,
                 onValueChange = { dcRedirects = it; dcError = null },
-                label = { Text("DC:IP") },
+                label = { Text(stringResource(R.string.dc_ip_label)) },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 3,
                 maxLines = 6,
@@ -373,6 +400,116 @@ fun SettingsScreen(
                 isError = poolError != null,
                 supportingText = poolError?.let { { Text(it) } },
             )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            SectionHeader(text = stringResource(R.string.settings_interface))
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.settings_detailed_stats))
+                    Text(
+                        text = stringResource(R.string.settings_detailed_stats_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(
+                    checked = showDetailedStats,
+                    onCheckedChange = { showDetailedStats = it },
+                    colors = tgSwitchColors(),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            SectionHeader(text = stringResource(R.string.settings_diagnostics))
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.diagnostics_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (diagnosticState.isRecording) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(R.string.diagnostics_recording),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = TgBlue,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.diagnostics_time_left,
+                                diagnosticState.remainingMinutes,
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onStopDiagnostics,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                    ) {
+                        Text(stringResource(R.string.diagnostics_stop))
+                    }
+                }
+            } else {
+                Button(
+                    onClick = onStartDiagnostics,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Icon(Icons.Default.BugReport, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(stringResource(R.string.diagnostics_start))
+                }
+            }
+
+            if (diagnosticState.hasLog) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = stringResource(
+                        R.string.diagnostics_log_size,
+                        MtProtoConstants.humanBytes(diagnosticState.sizeBytes),
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onExportDiagnostics,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                    ) {
+                        Text(stringResource(R.string.diagnostics_export))
+                    }
+                    TextButton(
+                        onClick = onClearDiagnostics,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.diagnostics_clear))
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
         }

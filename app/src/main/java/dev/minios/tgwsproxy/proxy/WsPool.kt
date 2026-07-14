@@ -1,6 +1,7 @@
 package dev.minios.tgwsproxy.proxy
 
 import android.util.Log
+import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
@@ -161,6 +162,7 @@ class WsPool(
 
         val needed = poolSize - queue.size
         if (needed <= 0) return
+        val refillStartedAt = System.currentTimeMillis()
 
         val domains = MtProtoConstants.wsDomainsForDc(dc, isMedia)
 
@@ -189,6 +191,14 @@ class WsPool(
         }
 
         if (TgWsProxyServer.globalVerbose) Log.d(TAG, "WS pool refilled DC$dc${if (isMedia) "m" else ""}: ${queue.size} ready")
+        DiagnosticLogger.event(
+            "pool_refill_completed",
+            "dc" to dc,
+            "media" to isMedia,
+            "requested" to needed,
+            "ready" to queue.size,
+            "elapsedMs" to System.currentTimeMillis() - refillStartedAt,
+        )
     }
 
     /**

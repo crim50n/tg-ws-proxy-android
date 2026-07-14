@@ -16,8 +16,8 @@ android {
         applicationId = "dev.minios.tgwsproxy"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     val hasPropertiesFile = File("app/keystore/signing.properties").exists()
@@ -39,10 +39,11 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".dev"
-            resValue("string", "app_name", "TG WS Proxy Dev")
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "TG WS Proxy Dev"
         }
         release {
+            manifestPlaceholders["appLabel"] = "@string/app_name"
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -67,8 +68,8 @@ android {
     }
 
     lint {
-        // Compose's detector bundled with this AGP cannot read Kotlin 2.1 metadata.
-        disable += "CoroutineCreationDuringComposition"
+        // Compose detectors bundled with this AGP cannot read Kotlin 2.1 metadata.
+        disable += setOf("CoroutineCreationDuringComposition", "StateFlowValueCalledInComposition")
     }
 }
 
@@ -101,7 +102,7 @@ dependencies {
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // OkHttp for HTTP requests (update checking, CF domain fetching)
+    // OkHttp for CF domain fetching
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
     testImplementation("junit:junit:4.13.2")

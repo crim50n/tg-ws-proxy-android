@@ -50,6 +50,14 @@ jobs:
             exit 1
           fi
 
+          MANIFEST_VERSION=$(python3 -c 'import json; print(json.load(open("update.json"))["versionName"])')
+          MANIFEST_CODE=$(python3 -c 'import json; print(json.load(open("update.json"))["versionCode"])')
+          MANIFEST_URL=$(python3 -c 'import json; print(json.load(open("update.json"))["releaseUrl"])')
+          EXPECTED_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${{ steps.version.outputs.name }}"
+          test "$MANIFEST_VERSION" = "${{ steps.version.outputs.name }}" || { echo "::error::update.json versionName mismatch"; exit 1; }
+          test "$MANIFEST_CODE" = "${{ steps.version.outputs.code }}" || { echo "::error::update.json versionCode mismatch"; exit 1; }
+          test "$MANIFEST_URL" = "$EXPECTED_URL" || { echo "::error::update.json releaseUrl mismatch"; exit 1; }
+
       - name: Decode Keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}

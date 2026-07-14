@@ -2,30 +2,55 @@ package dev.minios.tgwsproxy.ui.screens
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.minios.tgwsproxy.BuildConfig
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.ui.theme.TgBlue
+import dev.minios.tgwsproxy.update.UpdateState
+
+private const val PROJECT_URL = "https://github.com/crim50n/tg-ws-proxy-android"
+private const val LICENSE_URL = "$PROJECT_URL/blob/master/LICENSE"
+private const val FLOWSEAL_URL = "https://github.com/Flowseal/tg-ws-proxy"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AboutScreen(
+    updateState: UpdateState,
+    onCheckForUpdates: () -> Unit,
+    onOpenUpdate: () -> Unit,
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
-    val versionName = try {
-        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "?"
-    } catch (_: Exception) { "?" }
+    val openUrl: (String) -> Unit = { url ->
+        try {
+            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -34,7 +59,10 @@ fun AboutScreen(
                 title = { Text(stringResource(R.string.about_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = stringResource(R.string.navigate_back),
+                        )
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -49,52 +77,238 @@ fun AboutScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(24.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Spacer(modifier = Modifier.height(24.dp))
+            Box(
+                modifier = Modifier
+                    .size(88.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(TgBlue),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_launcher_foreground),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
 
-            Text(
-                text = "TG WS Proxy",
-                style = MaterialTheme.typography.headlineMedium,
-            )
-
-            Text(
-                text = stringResource(R.string.about_version, versionName),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = TgBlue.copy(alpha = 0.12f),
+                ) {
+                    Text(
+                        text = stringResource(
+                            R.string.about_version,
+                            BuildConfig.VERSION_NAME,
+                            BuildConfig.VERSION_CODE,
+                        ),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = TgBlue,
+                    )
+                }
+            }
 
             Text(
                 text = stringResource(R.string.about_description),
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            UpdateCheckCard(
+                updateState = updateState,
+                onCheck = onCheckForUpdates,
+                onOpenUpdate = onOpenUpdate,
+            )
 
-            OutlinedButton(
-                onClick = {
-                    try {
-                        context.startActivity(
-                            Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/crim50n/tg-ws-proxy-android"))
-                        )
-                    } catch (_: Exception) {}
-                },
-                shape = RoundedCornerShape(12.dp),
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
             ) {
-                Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("GitHub")
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                    AboutFeature(
+                        icon = Icons.Default.Lock,
+                        title = stringResource(R.string.about_local_title),
+                        text = stringResource(R.string.about_local_text),
+                    )
+                    HorizontalDivider()
+                    AboutFeature(
+                        icon = Icons.Default.SwapHoriz,
+                        title = stringResource(R.string.about_transport_title),
+                        text = stringResource(R.string.about_transport_text),
+                    )
+                    HorizontalDivider()
+                    AboutFeature(
+                        icon = Icons.Default.Notifications,
+                        title = stringResource(R.string.about_background_title),
+                        text = stringResource(R.string.about_background_text),
+                    )
+                }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = { openUrl(PROJECT_URL) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(Icons.Default.Code, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(stringResource(R.string.about_source_code))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            Icons.AutoMirrored.Filled.OpenInNew,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { openUrl(LICENSE_URL) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(stringResource(R.string.about_license))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            Icons.AutoMirrored.Filled.OpenInNew,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+            }
 
             Text(
                 text = stringResource(R.string.about_based_on),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            TextButton(onClick = { openUrl(FLOWSEAL_URL) }) {
+                Text(stringResource(R.string.about_flowseal_project))
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    Icons.AutoMirrored.Filled.OpenInNew,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateCheckCard(
+    updateState: UpdateState,
+    onCheck: () -> Unit,
+    onOpenUpdate: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            when (updateState) {
+                UpdateState.Idle -> Unit
+                UpdateState.Checking -> Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(stringResource(R.string.update_checking))
+                }
+                UpdateState.UpToDate -> Text(
+                    text = stringResource(R.string.update_up_to_date),
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                UpdateState.Error -> Text(
+                    text = stringResource(R.string.update_check_failed),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                is UpdateState.Available -> Text(
+                    text = stringResource(
+                        R.string.update_available_version,
+                        updateState.release.versionName,
+                    ),
+                    color = TgBlue,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
+            if (updateState is UpdateState.Available) {
+                Button(
+                    onClick = onOpenUpdate,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(stringResource(R.string.update_open_release))
+                }
+            } else {
+                OutlinedButton(
+                    onClick = onCheck,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = updateState !is UpdateState.Checking,
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Text(stringResource(R.string.update_check_now))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AboutFeature(icon: ImageVector, title: String, text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 14.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Surface(
+            modifier = Modifier.size(40.dp),
+            shape = RoundedCornerShape(12.dp),
+            color = TgBlue.copy(alpha = 0.12f),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = TgBlue,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = text,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

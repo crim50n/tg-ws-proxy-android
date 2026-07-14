@@ -9,16 +9,23 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.core.content.FileProvider
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import dev.minios.tgwsproxy.BuildConfig
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.data.ConfigRepository
+import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import dev.minios.tgwsproxy.proxy.*
 import dev.minios.tgwsproxy.service.ProxyService
+import dev.minios.tgwsproxy.update.UpdateRepository
+import dev.minios.tgwsproxy.update.UpdatePolicy
+import dev.minios.tgwsproxy.update.UpdateState
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val configRepo = ConfigRepository(application)
+    private val updateRepository = UpdateRepository(application)
 
     val config: StateFlow<ProxyConfig> = configRepo.configFlow
         .stateIn(viewModelScope, SharingStarted.Eagerly, ProxyConfig())
@@ -31,6 +38,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _cfTestResult = MutableStateFlow<String?>(null)
     val cfTestResult: StateFlow<String?> = _cfTestResult.asStateFlow()
+    val diagnosticState = DiagnosticLogger.state
+    private val _updateState = MutableStateFlow(updateRepository.cachedState())
+    val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
 
     // Save-and-restart warning message.
     private val _toastMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
@@ -39,9 +49,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var statsJob: Job? = null
 
     init {
+        DiagnosticLogger.initialize(application)
+        checkForUpdates(manual = false)
         // Monitor service state
         viewModelScope.launch {
             while (isActive) {
+                DiagnosticLogger.refresh()
                 _isRunning.value = ProxyService.isRunning
                 if (_isRunning.value) {
                     _stats.value = ProxyStats.snapshot()
@@ -63,22 +76,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _isRunning.value = false
     }
 
-    fun restartProxy() {
-        val ctx = getApplication<Application>()
-        viewModelScope.launch {
-            ProxyService.stop(ctx)
-            _isRunning.value = false
-            // Keep the restart delay short while allowing the listener to close.
-            delay(300)
-            startProxy()
-        }
-    }
-
     fun saveConfig(newConfig: ProxyConfig) {
+        val previousConfig = config.value
         viewModelScope.launch {
             configRepo.saveConfig(newConfig)
             // Show a restart warning if the proxy is running.
-            if (_isRunning.value) {
+            val runtimeConfigChanged = previousConfig.copy(
+                showDetailedStats = newConfig.showDetailedStats,
+            ) != newConfig
+            if (_isRunning.value && runtimeConfigChanged) {
                 _toastMessage.tryEmit(
                     getApplication<Application>().getString(R.string.settings_restart_required)
                 )
@@ -87,12 +93,79 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun regenerateSecret(): String {
-        val newSecret = ProxyConfig.generateSecret()
+        return ProxyConfig.generateSecret()
+    }
+
+    fun checkForUpdates(manual: Boolean = true) {
+        if (_updateState.value is UpdateState.Checking) return
+        if (!manual && !updateRepository.shouldCheck()) return
+        val cachedAvailable = _updateState.value as? UpdateState.Available
+        if (manual) _updateState.value = UpdateState.Checking
         viewModelScope.launch {
-            val cfg = configRepo.getConfig()
-            configRepo.saveConfig(cfg.copy(secret = newSecret))
+            updateRepository.check().fold(
+                onSuccess = { manifest ->
+                    val updateAvailable = UpdatePolicy.isAvailable(
+                        BuildConfig.VERSION_CODE,
+                        BuildConfig.VERSION_NAME,
+                        manifest,
+                    )
+                    _updateState.value = if (updateAvailable) {
+                        UpdateState.Available(manifest)
+                    } else if (manual) {
+                        UpdateState.UpToDate
+                    } else {
+                        UpdateState.Idle
+                    }
+                    DiagnosticLogger.event(
+                        "update_check_completed",
+                        "available" to updateAvailable,
+                        "remoteVersion" to manifest.versionName,
+                    )
+                },
+                onFailure = { error ->
+                    _updateState.value = cachedAvailable ?: if (manual) UpdateState.Error else UpdateState.Idle
+                    DiagnosticLogger.failure("update_check_failed", error)
+                },
+            )
         }
-        return newSecret
+    }
+
+    fun openAvailableUpdate() {
+        val manifest = (_updateState.value as? UpdateState.Available)?.release ?: return
+        val ctx = getApplication<Application>()
+        try {
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(manifest.releaseUrl)).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            })
+        } catch (_: Exception) {
+            _toastMessage.tryEmit(ctx.getString(R.string.update_open_failed))
+        }
+    }
+
+    fun startDiagnostics() = DiagnosticLogger.start()
+
+    fun stopDiagnostics() = DiagnosticLogger.stop()
+
+    fun clearDiagnostics() = DiagnosticLogger.clear()
+
+    fun exportDiagnostics() {
+        val ctx = getApplication<Application>()
+        val file = DiagnosticLogger.createExportFile() ?: return
+        try {
+            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_STREAM, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            ctx.startActivity(
+                Intent.createChooser(shareIntent, ctx.getString(R.string.diagnostics_export)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        } catch (_: Exception) {
+            _toastMessage.tryEmit(ctx.getString(R.string.diagnostics_export_failed))
+        }
     }
 
     fun copyProxyLink() {
@@ -104,11 +177,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         Toast.makeText(ctx, R.string.link_copied, Toast.LENGTH_SHORT).show()
     }
 
-    fun copySecret() {
+    fun copySecret(secret: String) {
         val ctx = getApplication<Application>()
-        val cfg = config.value
         val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Secret", "dd${cfg.secret}"))
+        clipboard.setPrimaryClip(ClipData.newPlainText("Secret", "dd$secret"))
         Toast.makeText(ctx, R.string.secret_copied, Toast.LENGTH_SHORT).show()
     }
 
@@ -122,7 +194,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             ctx.startActivity(intent)
         } catch (e: Exception) {
-            Toast.makeText(ctx, "Telegram not found", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, R.string.telegram_not_found, Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -139,7 +211,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             val allDomains = cfg.getAllCfDomains()
             if (allDomains.isEmpty()) {
-                results.appendLine("CF proxy disabled or no domains available")
+                results.appendLine(getApplication<Application>().getString(R.string.cf_test_no_domains))
                 _cfTestResult.value = results.toString()
                 return@launch
             }

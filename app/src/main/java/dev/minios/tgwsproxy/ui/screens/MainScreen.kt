@@ -2,7 +2,6 @@ package dev.minios.tgwsproxy.ui.screens
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -21,12 +20,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.proxy.StatsSnapshot
 import dev.minios.tgwsproxy.ui.theme.*
+import dev.minios.tgwsproxy.update.UpdateState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,20 +33,21 @@ fun MainScreen(
     config: ProxyConfig,
     isRunning: Boolean,
     stats: StatsSnapshot,
+    updateState: UpdateState,
     onStart: () -> Unit,
     onStop: () -> Unit,
-    onRestart: () -> Unit,
     onOpenInTelegram: () -> Unit,
     onCopyLink: () -> Unit,
-    onCopySecret: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenAbout: () -> Unit,
+    onOpenUpdate: () -> Unit,
 ) {
+    val proxyLink = remember(config) { config.proxyLink() }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("TG WS Proxy") },
+                title = { Text(stringResource(R.string.app_name)) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = TgBlue,
                     titleContentColor = androidx.compose.ui.graphics.Color.White,
@@ -72,59 +72,106 @@ fun MainScreen(
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // Status indicator
-            StatusCard(isRunning = isRunning, config = config)
+            val availableUpdate = (updateState as? UpdateState.Available)?.release
+            AnimatedVisibility(
+                visible = availableUpdate != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                if (availableUpdate != null) {
+                    Column {
+                        UpdateCard(
+                            versionName = availableUpdate.versionName,
+                            onOpenUpdate = onOpenUpdate,
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                }
+            }
+
+            StatusCard(
+                isRunning = isRunning,
+                config = config,
+                uptimeSeconds = stats.uptimeSeconds,
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Action buttons with animated transitions
-            ActionButtons(
+            ControlsCard(
                 isRunning = isRunning,
                 onStart = onStart,
                 onStop = onStop,
-                onRestart = onRestart,
+                onOpenInTelegram = onOpenInTelegram,
+                onCopyLink = onCopyLink,
+                proxyLink = proxyLink,
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Proxy link actions (animated)
             AnimatedVisibility(
                 visible = isRunning,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically(),
             ) {
                 Column {
-                    LinkActions(
-                        onOpenInTelegram = onOpenInTelegram,
-                        onCopyLink = onCopyLink,
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
+                    TrafficCard(stats = stats)
+                    AnimatedVisibility(
+                        visible = config.showDetailedStats,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically(),
+                    ) {
+                        Column {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            StatsCard(stats = stats)
+                        }
+                    }
                 }
-            }
-
-            // Connection info
-            ConnectionInfoCard(
-                config = config,
-                onCopySecret = onCopySecret,
-                onCopyLink = onCopyLink,
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Stats (when running)
-            AnimatedVisibility(
-                visible = isRunning,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                StatsCard(stats = stats)
             }
         }
     }
 }
 
 @Composable
-private fun StatusCard(isRunning: Boolean, config: ProxyConfig) {
+private fun UpdateCard(versionName: String, onOpenUpdate: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = TgBlue.copy(alpha = 0.12f)),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.SystemUpdate,
+                contentDescription = null,
+                tint = TgBlue,
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = stringResource(R.string.update_available_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = stringResource(R.string.update_available_version, versionName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = onOpenUpdate) {
+                Text(stringResource(R.string.update_open))
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusCard(isRunning: Boolean, config: ProxyConfig, uptimeSeconds: Long) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -149,7 +196,7 @@ private fun StatusCard(isRunning: Boolean, config: ProxyConfig) {
                     .background(if (isRunning) StatusGreen else StatusRed),
             )
             Spacer(modifier = Modifier.width(12.dp))
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = if (isRunning) {
                         stringResource(R.string.proxy_running)
@@ -159,12 +206,56 @@ private fun StatusCard(isRunning: Boolean, config: ProxyConfig) {
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
-                if (isRunning) {
-                    Text(
-                        text = "${config.host}:${config.port}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                Text(
+                    text = "${config.host}:${config.port}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontFamily = FontFamily.Monospace,
+                )
+            }
+            if (isRunning && uptimeSeconds > 0) {
+                Text(
+                    text = formatUptime(uptimeSeconds),
+                    style = MaterialTheme.typography.labelLarge.copy(
                         fontFamily = FontFamily.Monospace,
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ControlsCard(
+    isRunning: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onOpenInTelegram: () -> Unit,
+    onCopyLink: () -> Unit,
+    proxyLink: String,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            ActionButtons(
+                isRunning = isRunning,
+                onStart = onStart,
+                onStop = onStop,
+            )
+            AnimatedVisibility(
+                visible = isRunning,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                Column {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LinkActions(
+                        proxyLink = proxyLink,
+                        onOpenInTelegram = onOpenInTelegram,
+                        onCopyLink = onCopyLink,
                     )
                 }
             }
@@ -178,7 +269,6 @@ private fun ActionButtons(
     isRunning: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
-    onRestart: () -> Unit,
 ) {
     AnimatedContent(
         targetState = isRunning,
@@ -187,44 +277,29 @@ private fun ActionButtons(
         },
         label = "action_buttons",
     ) { running ->
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (!running) {
-                Button(
-                    onClick = onStart,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.btn_start))
-                }
-            } else {
-                Button(
-                    onClick = onStop,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                ) {
-                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.btn_stop), fontSize = 13.sp, maxLines = 1)
-                }
-                OutlinedButton(
-                    onClick = onRestart,
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(12.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(stringResource(R.string.btn_restart), fontSize = 13.sp, maxLines = 1)
-                }
+        if (!running) {
+            Button(
+                onClick = onStart,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.btn_start))
+            }
+        } else {
+            Button(
+                onClick = onStop,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            ) {
+                Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(stringResource(R.string.btn_stop))
             }
         }
     }
@@ -232,152 +307,38 @@ private fun ActionButtons(
 
 @Composable
 private fun LinkActions(
+    proxyLink: String,
     onOpenInTelegram: () -> Unit,
     onCopyLink: () -> Unit,
 ) {
-    Row(
+    Button(
+        onClick = onOpenInTelegram,
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+        shape = RoundedCornerShape(12.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        Button(
-            onClick = onOpenInTelegram,
-            modifier = Modifier.weight(1f),
-            colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-        ) {
-            Text(stringResource(R.string.open_in_telegram), fontSize = 13.sp, maxLines = 1)
-        }
-        OutlinedButton(
-            onClick = onCopyLink,
-            modifier = Modifier.weight(1f),
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp),
-        ) {
-            Text(stringResource(R.string.copy_link), fontSize = 13.sp, maxLines = 1)
-        }
+        Text(stringResource(R.string.open_in_telegram))
     }
-}
-
-@Composable
-private fun ConnectionInfoCard(
-    config: ProxyConfig,
-    onCopySecret: () -> Unit,
-    onCopyLink: () -> Unit,
-) {
-    Card(
+    Spacer(modifier = Modifier.height(12.dp))
+    OutlinedTextField(
+        value = proxyLink,
+        onValueChange = {},
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(
-                text = stringResource(R.string.settings_connection),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            InfoRow(label = stringResource(R.string.settings_host), value = config.host)
-            InfoRow(label = stringResource(R.string.settings_port), value = config.port.toString())
-
-            // Secret — truncated, tappable to copy
-            val fullSecret = "dd${config.secret}"
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onCopySecret)
-                    .padding(vertical = 6.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(R.string.info_secret),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "${fullSecret.take(8)}...${fullSecret.takeLast(6)}",
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontFamily = FontFamily.Monospace,
-                        ),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Icon(
-                        Icons.Default.ContentCopy,
-                        contentDescription = null,
-                        modifier = Modifier.size(14.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            // Link — tappable to copy
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onCopyLink)
-                    .padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(R.string.info_link),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = config.proxyLink(),
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 10.sp,
-                        ),
-                        color = TgBlue,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(modifier = Modifier.width(4.dp))
+        readOnly = true,
+        singleLine = true,
+        label = { Text(stringResource(R.string.proxy_link)) },
+        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        shape = RoundedCornerShape(12.dp),
+        trailingIcon = {
+            IconButton(onClick = onCopyLink) {
                 Icon(
                     Icons.Default.ContentCopy,
-                    contentDescription = null,
-                    modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    contentDescription = stringResource(R.string.copy_link),
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun InfoRow(
-    label: String,
-    value: String,
-    monospace: Boolean = false,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium.copy(
-                fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default,
-            ),
-            textAlign = TextAlign.End,
-            modifier = Modifier.weight(1f, fill = false).padding(start = 8.dp),
-        )
-    }
+        },
+    )
 }
 
 private fun formatUptime(seconds: Long): String {
@@ -388,33 +349,60 @@ private fun formatUptime(seconds: Long): String {
 }
 
 @Composable
+private fun TrafficCard(stats: StatsSnapshot) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = TgBlue.copy(alpha = 0.12f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.SwapVert,
+                        contentDescription = null,
+                        tint = TgBlue,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column {
+                Text(
+                    text = stringResource(R.string.stats_traffic),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = MtProtoConstants.humanBytes(stats.bytesUp + stats.bytesDown),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TgBlue,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun StatsCard(stats: StatsSnapshot) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
-            // Header with uptime
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = stringResource(R.string.stats_connections),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                if (stats.uptimeSeconds > 0) {
-                    Text(
-                        text = formatUptime(stats.uptimeSeconds),
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontFamily = FontFamily.Monospace,
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+            Text(
+                text = stringResource(R.string.stats_connections),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
             Spacer(modifier = Modifier.height(12.dp))
 
             // Row 1: Total, Active, WS, CF
@@ -461,7 +449,7 @@ private fun StatsCard(stats: StatsSnapshot) {
                     modifier = Modifier.weight(1f),
                 )
                 val poolTotal = stats.poolHits + stats.poolMisses
-                val poolStr = if (poolTotal > 0) "${stats.poolHits}/$poolTotal" else "n/a"
+                val poolStr = if (poolTotal > 0) "${stats.poolHits}/$poolTotal" else "—"
                 StatItem(
                     label = stringResource(R.string.stats_pool),
                     value = poolStr,
@@ -471,7 +459,7 @@ private fun StatsCard(stats: StatsSnapshot) {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Row 3: Bad, WS errors (balanced with 4 cols)
+            // Error counters use the full row instead of leaving empty grid cells.
             Row(modifier = Modifier.fillMaxWidth()) {
                 StatItem(
                     label = stringResource(R.string.stats_bad),
@@ -485,9 +473,6 @@ private fun StatsCard(stats: StatsSnapshot) {
                     modifier = Modifier.weight(1f),
                     valueColor = if (stats.wsErrors > 0) StatusOrange else TgBlue,
                 )
-                // Filler cells for alignment
-                Box(modifier = Modifier.weight(1f))
-                Box(modifier = Modifier.weight(1f))
             }
         }
     }

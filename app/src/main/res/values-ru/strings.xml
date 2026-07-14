@@ -3,23 +3,25 @@
     <!-- Main screen -->
     <string name="proxy_stopped">Прокси остановлен</string>
     <string name="proxy_running">Прокси запущен</string>
-    <string name="btn_start">Запустить</string>
+    <string name="btn_start">Подключить</string>
     <string name="btn_stop">Остановить</string>
     <string name="btn_restart">Перезапустить</string>
     <string name="open_in_telegram">Открыть в Telegram</string>
     <string name="copy_link">Скопировать ссылку</string>
+    <string name="proxy_link">Ссылка прокси</string>
     <string name="link_copied">Ссылка скопирована</string>
     <string name="secret_copied">Секрет скопирован</string>
     <string name="settings">Настройки</string>
 
     <!-- Stats -->
+    <string name="stats_traffic">Трафик</string>
     <string name="stats_connections">Соединения</string>
     <string name="stats_total">Всего</string>
     <string name="stats_active">Активных</string>
     <string name="stats_ws">WS</string>
     <string name="stats_tcp_fallback">TCP</string>
     <string name="stats_cf_proxy">CF</string>
-    <string name="stats_bad">Плохих</string>
+    <string name="stats_bad">Отклонено</string>
     <string name="stats_ws_errors">Ош. WS</string>
     <string name="stats_upload">Отпр.</string>
     <string name="stats_download">Получ.</string>
@@ -31,6 +33,7 @@
     <string name="settings_host">IP адрес</string>
     <string name="settings_port">Порт</string>
     <string name="settings_secret">Секрет</string>
+    <string name="settings_copy_secret">Скопировать секрет</string>
     <string name="settings_regenerate_secret">Сгенерировать новый</string>
     <string name="settings_dc_section">Датацентры Telegram (DC → IP)</string>
     <string name="settings_dc_hint">Формат: DC:IP (по одному на строку)\nНапример: 2:149.154.167.220</string>
@@ -47,10 +50,19 @@
     <string name="settings_save">Сохранить</string>
     <string name="settings_cancel">Отмена</string>
     <string name="settings_restart_required">Перезапустите прокси для применения</string>
-
-    <!-- Connection info card -->
-    <string name="info_secret">Секрет</string>
-    <string name="info_link">Ссылка</string>
+    <string name="settings_interface">Интерфейс</string>
+    <string name="settings_detailed_stats">Подробная статистика</string>
+    <string name="settings_detailed_stats_desc">Показывать соединения, маршруты, пул и ошибки на главном экране</string>
+    <string name="settings_diagnostics">Диагностика</string>
+    <string name="diagnostics_description">Временно записывает локальные события сервиса и подключений. Содержимое трафика, ссылки прокси и секреты не сохраняются и никуда не отправляются.</string>
+    <string name="diagnostics_start">Записывать 30 минут</string>
+    <string name="diagnostics_stop">Остановить</string>
+    <string name="diagnostics_recording">Диагностика записывается</string>
+    <string name="diagnostics_time_left">Осталось не более %1$d мин</string>
+    <string name="diagnostics_log_size">Локальный журнал: %1$s</string>
+    <string name="diagnostics_export">Экспортировать</string>
+    <string name="diagnostics_clear">Удалить</string>
+    <string name="diagnostics_export_failed">Не удалось экспортировать журнал диагностики</string>
 
     <!-- Validation errors -->
     <string name="validation_host_format">Введите корректный IP-адрес или имя хоста</string>
@@ -64,7 +76,9 @@
     <!-- Notification -->
     <string name="notification_channel_name">Прокси сервис</string>
     <string name="notification_channel_desc">Показывает статус прокси</string>
-    <string name="notification_running">Прокси работает на %1$s:%2$d</string>
+    <string name="notification_running">Трафик: %1$s</string>
+    <string name="notification_restarting">Перезапуск прокси…</string>
+    <string name="notification_restart">Перезапустить</string>
     <string name="notification_stop">Остановить</string>
 
     <!-- Quick Settings tile -->
@@ -76,10 +90,34 @@
     <string name="cf_test_fail">DC%1$d: Ошибка</string>
     <string name="cf_test_best">Лучший домен: %1$s</string>
     <string name="cf_test_done">Тест завершён</string>
+    <string name="cf_test_no_domains">CF-прокси отключён или список доменов пуст</string>
+
+    <!-- Common UI -->
+    <string name="navigate_back">Назад</string>
+    <string name="telegram_not_found">Telegram не установлен</string>
+    <string name="notification_permission_required">Для фоновой работы требуется разрешение на уведомления</string>
+    <string name="update_check_now">Проверить обновления</string>
+    <string name="update_checking">Проверка обновлений…</string>
+    <string name="update_up_to_date">Установлена последняя версия</string>
+    <string name="update_check_failed">Не удалось проверить обновления</string>
+    <string name="update_available_title">Доступно обновление</string>
+    <string name="update_available_version">Доступна версия %1$s</string>
+    <string name="update_open">Открыть</string>
+    <string name="update_open_release">Открыть страницу релиза</string>
+    <string name="update_open_failed">Не удалось открыть страницу релиза</string>
 
     <!-- About screen -->
     <string name="about_title">О приложении</string>
-    <string name="about_version">Версия %1$s</string>
-    <string name="about_description">Минимальный локальный MTProto прокси для Telegram через WebSocket.</string>
-    <string name="about_based_on">На основе tg-ws-proxy от Flowseal</string>
+    <string name="about_version">Версия %1$s (%2$d)</string>
+    <string name="about_description">Локальный MTProto-прокси для Telegram с транспортом WebSocket и автоматическим резервированием через Cloudflare и TCP.</string>
+    <string name="about_local_title">Локально и приватно</string>
+    <string name="about_local_text">Полностью работает на устройстве без root-прав, аккаунта, рекламы и аналитики.</string>
+    <string name="about_transport_title">Устойчивое подключение</string>
+    <string name="about_transport_text">Использует пул TLS WebSocket-соединений с резервными маршрутами через Cloudflare и прямой TCP.</string>
+    <string name="about_background_title">Работа в фоне</string>
+    <string name="about_background_text">Фоновый сервис, управление из уведомления, плитка быстрых настроек и статистика в реальном времени.</string>
+    <string name="about_source_code">Исходный код</string>
+    <string name="about_license">Лицензия MIT</string>
+    <string name="about_based_on">Вдохновлено проектом tg-ws-proxy от Flowseal. Android-версия развивается независимо.</string>
+    <string name="about_flowseal_project">Исходный проект Flowseal</string>
 </resources>

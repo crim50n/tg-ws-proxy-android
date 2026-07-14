@@ -1,6 +1,7 @@
 package dev.minios.tgwsproxy.proxy
 
 import android.util.Log
+import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import kotlinx.coroutines.*
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -69,12 +70,13 @@ class TgWsProxyServer(
             return@withContext
         }
 
-        // Historical stats remain process-wide; only active state is reset.
-        ProxyStats.resetActive()
+        ProxyStats.resetAll()
+        ProxyStats.startedAtMs = System.currentTimeMillis()
         badHandshakeCount.set(0)
         lastBadHandshakeLog = 0L
         Bridge.resetState() // Clear WS blacklist and cooldown on restart
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val startupStartedAt = System.currentTimeMillis()
 
         try {
             // Initialize WS pool
@@ -85,6 +87,11 @@ class TgWsProxyServer(
                 it.start(scope!!)
                 it.warmUp(config.dcRedirects)
             }
+            DiagnosticLogger.event(
+                "pool_warmup_started",
+                "poolSize" to config.poolSize,
+                "dcCount" to config.dcRedirects.size,
+            )
 
             // CF domain refresh is owned by ProxyService.
 
@@ -107,6 +114,11 @@ class TgWsProxyServer(
                 return@withContext
             }
             listening.set(true)
+            DiagnosticLogger.event(
+                "listener_ready",
+                "port" to config.port,
+                "elapsedMs" to System.currentTimeMillis() - startupStartedAt,
+            )
 
             logStartupBanner()
 
@@ -137,6 +149,7 @@ class TgWsProxyServer(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Server error: ${e.message}", e)
+            DiagnosticLogger.failure("server_failed", e)
             throw e
         } finally {
             cleanup()
@@ -168,6 +181,15 @@ class TgWsProxyServer(
         }
 
         Log.i(TAG, "Proxy server stopped. ${ProxyStats.formatStats()}")
+        val stats = ProxyStats.snapshot()
+        DiagnosticLogger.event(
+            "server_stopped",
+            "total" to stats.connectionsTotal,
+            "rejected" to stats.connectionsBad,
+            "wsErrors" to stats.wsErrors,
+            "bytesUp" to stats.bytesUp,
+            "bytesDown" to stats.bytesDown,
+        )
     }
 
     /**
@@ -274,6 +296,7 @@ class TgWsProxyServer(
                     Log.w(TAG, "Invalid handshake from $clientAddr (total bad: $count)")
                 }
                 ProxyStats.connectionsBad.incrementAndGet()
+                DiagnosticLogger.event("handshake_rejected", "total" to count)
                 // Drain connection (matching Python behavior to avoid connection reset)
                 try {
                     val drainBuf = ByteArray(4096)
@@ -286,6 +309,7 @@ class TgWsProxyServer(
             val dcIndex = handshake.dcIndex.toInt()
             val absDc = if (dcIndex < 0) -dcIndex else dcIndex
             val isMedia = dcIndex < 0
+            DiagnosticLogger.event("handshake_ok", "dc" to absDc, "media" to isMedia)
 
             if (globalVerbose) {
                 Log.d(TAG, "Handshake OK: DC=$dcIndex (abs=$absDc, media=$isMedia) from $clientAddr")
@@ -309,6 +333,12 @@ class TgWsProxyServer(
                 pool = wsPool,
                 protoTag = handshake.protoTag,
                 relayInit = relayInit.initPacket,
+            )
+            DiagnosticLogger.event(
+                "upstream_connected",
+                "dc" to absDc,
+                "media" to isMedia,
+                "route" to upstream.type,
             )
 
             if (globalVerbose) {
@@ -335,10 +365,12 @@ class TgWsProxyServer(
             if (globalVerbose) {
                 Log.d(TAG, "Handshake timeout: $clientAddr")
             }
+            DiagnosticLogger.event("handshake_timeout")
         } catch (e: Exception) {
             if (globalVerbose) {
                 Log.w(TAG, "Client handler error ($clientAddr): ${e.message}")
             }
+            DiagnosticLogger.failure("client_session_failed", e)
         } finally {
             // Use updateAndGet to prevent going negative (can happen on restart race)
             ProxyStats.connectionsActive.updateAndGet { if (it > 0) it - 1 else 0 }

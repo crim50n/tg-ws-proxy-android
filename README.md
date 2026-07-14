@@ -16,10 +16,12 @@ require root, an external proxy server, an account, analytics, or ads.
 - Validated Cloudflare domain pool with per-DC sticky balancing
 - Configurable Cloudflare-first or TCP-first fallback order
 - Automatic pool reset and warmup after network changes
-- Foreground service, wake lock, notification stop action, and Quick Settings tile
+- Foreground service, wake lock, notification restart/stop actions, and Quick Settings tile
 - Abridged, intermediate, and padded-intermediate MTProto framing
 - English and Russian UI
 - Runtime traffic, connection, fallback, error, and pool statistics
+- Optional time-limited local diagnostic log with explicit export and redaction
+- Daily update notification with a static repository manifest fallback
 - Strict configuration validation and persistent DataStore settings
 
 ## Requirements
@@ -51,6 +53,26 @@ the local network; clients still need the generated secret.
 | Buffer size | `256 KB` | Socket buffer size, `4..4096 KB` |
 
 Saved settings apply after the running proxy is restarted.
+
+## Update Checks
+
+The app checks the repository's latest GitHub Release at most once every 24
+hours. If the API is unavailable or rate-limited, it falls back to
+[`update.json`](update.json) from the `master` branch. A manual check is also
+available on the About screen.
+
+For compatibility with installations made before `update.json` was published,
+an HTTP 404 falls back to the literal `versionCode` and `versionName` assignments
+in `app/build.gradle.kts`. Other manifest errors are reported instead of being
+silently ignored.
+
+The manifest contains only `versionCode`, `versionName`, and an HTTPS release
+page URL. The app accepts release URLs only for this repository and opens the
+page in the user's browser. It does not download or install APKs itself. Android
+continues to enforce the application signing certificate during installation.
+
+For a release, update the literal version assignments in `app/build.gradle.kts`
+and the matching values and tag URL in `update.json` before publishing the tag.
 
 ## Transport Behavior
 
@@ -109,6 +131,8 @@ GitHub release builds require the configured signing secrets.
 - `proxy/CfProxyDomains.kt`: validated Cloudflare domain management
 
 ## Credits
+
+Maintained by [crim50n](https://github.com/crim50n).
 
 Inspired by [tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) by Flowseal.
 This Android implementation is maintained independently.

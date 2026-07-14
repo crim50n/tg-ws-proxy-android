@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         if (!granted) {
-            Toast.makeText(this, "Notifications needed for foreground service", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, R.string.notification_permission_required, Toast.LENGTH_LONG).show()
         }
     }
 
@@ -58,6 +58,8 @@ private fun AppNavigation(viewModel: MainViewModel) {
     val isRunning by viewModel.isRunning.collectAsState()
     val stats by viewModel.stats.collectAsState()
     val cfTestResult by viewModel.cfTestResult.collectAsState()
+    val diagnosticState by viewModel.diagnosticState.collectAsState()
+    val updateState by viewModel.updateState.collectAsState()
 
     // Handle transient messages from the view model.
     val context = LocalContext.current
@@ -68,6 +70,10 @@ private fun AppNavigation(viewModel: MainViewModel) {
     }
 
     var currentScreen by remember { mutableStateOf<Screen>(Screen.Main) }
+    val closeSettings = {
+        viewModel.clearCfTestResult()
+        currentScreen = Screen.Main
+    }
 
     when (currentScreen) {
         Screen.Main -> {
@@ -75,40 +81,42 @@ private fun AppNavigation(viewModel: MainViewModel) {
                 config = config,
                 isRunning = isRunning,
                 stats = stats,
+                updateState = updateState,
                 onStart = { viewModel.startProxy() },
                 onStop = { viewModel.stopProxy() },
-                onRestart = { viewModel.restartProxy() },
                 onOpenInTelegram = { viewModel.openInTelegram() },
                 onCopyLink = { viewModel.copyProxyLink() },
-                onCopySecret = { viewModel.copySecret() },
                 onOpenSettings = { currentScreen = Screen.Settings },
                 onOpenAbout = { currentScreen = Screen.About },
+                onOpenUpdate = { viewModel.openAvailableUpdate() },
             )
         }
         Screen.Settings -> {
-            BackHandler { 
-                viewModel.clearCfTestResult()
-                currentScreen = Screen.Main
-            }
+            BackHandler(onBack = closeSettings)
             SettingsScreen(
                 config = config,
                 cfTestResult = cfTestResult,
+                diagnosticState = diagnosticState,
                 onSave = { newConfig ->
                     viewModel.saveConfig(newConfig)
-                    currentScreen = Screen.Main
+                    closeSettings()
                 },
-                onBack = {
-                    viewModel.clearCfTestResult()
-                    currentScreen = Screen.Main
-                },
+                onBack = closeSettings,
                 onRegenerateSecret = { viewModel.regenerateSecret() },
+                onCopySecret = { viewModel.copySecret(it) },
                 onTestCfProxy = { viewModel.testCfProxy() },
-                onClearCfTestResult = { viewModel.clearCfTestResult() },
+                onStartDiagnostics = { viewModel.startDiagnostics() },
+                onStopDiagnostics = { viewModel.stopDiagnostics() },
+                onExportDiagnostics = { viewModel.exportDiagnostics() },
+                onClearDiagnostics = { viewModel.clearDiagnostics() },
             )
         }
         Screen.About -> {
             BackHandler { currentScreen = Screen.Main }
             AboutScreen(
+                updateState = updateState,
+                onCheckForUpdates = { viewModel.checkForUpdates() },
+                onOpenUpdate = { viewModel.openAvailableUpdate() },
                 onBack = { currentScreen = Screen.Main },
             )
         }

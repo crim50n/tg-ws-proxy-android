@@ -5,23 +5,25 @@
     <!-- Main screen -->
     <string name="proxy_stopped">Proxy stopped</string>
     <string name="proxy_running">Proxy running</string>
-    <string name="btn_start">Start</string>
+    <string name="btn_start">Connect</string>
     <string name="btn_stop">Stop</string>
     <string name="btn_restart">Restart</string>
     <string name="open_in_telegram">Open in Telegram</string>
     <string name="copy_link">Copy link</string>
+    <string name="proxy_link">Proxy link</string>
     <string name="link_copied">Link copied</string>
     <string name="secret_copied">Secret copied</string>
     <string name="settings">Settings</string>
 
     <!-- Stats -->
+    <string name="stats_traffic">Traffic</string>
     <string name="stats_connections">Connections</string>
     <string name="stats_total">Total</string>
     <string name="stats_active">Active</string>
     <string name="stats_ws">WS</string>
     <string name="stats_tcp_fallback">TCP</string>
     <string name="stats_cf_proxy">CF</string>
-    <string name="stats_bad">Bad</string>
+    <string name="stats_bad">Rejected</string>
     <string name="stats_ws_errors">WS err</string>
     <string name="stats_upload">Sent</string>
     <string name="stats_download">Recv</string>
@@ -33,6 +35,7 @@
     <string name="settings_host">IP address</string>
     <string name="settings_port">Port</string>
     <string name="settings_secret">Secret</string>
+    <string name="settings_copy_secret">Copy secret</string>
     <string name="settings_regenerate_secret">Regenerate secret</string>
     <string name="settings_dc_section">Telegram Datacenters (DC → IP)</string>
     <string name="settings_dc_hint">Format: DC:IP (one per line)\nExample: 2:149.154.167.220</string>
@@ -49,10 +52,19 @@
     <string name="settings_save">Save</string>
     <string name="settings_cancel">Cancel</string>
     <string name="settings_restart_required">Restart proxy to apply changes</string>
-
-    <!-- Connection info card -->
-    <string name="info_secret">Secret</string>
-    <string name="info_link">Link</string>
+    <string name="settings_interface">Interface</string>
+    <string name="settings_detailed_stats">Detailed statistics</string>
+    <string name="settings_detailed_stats_desc">Show connection, route, pool, and error counters on the main screen</string>
+    <string name="settings_diagnostics">Diagnostics</string>
+    <string name="diagnostics_description">Temporarily records local service and connection events. Traffic contents, proxy links, and secrets are never logged or uploaded.</string>
+    <string name="diagnostics_start">Record for 30 minutes</string>
+    <string name="diagnostics_stop">Stop</string>
+    <string name="diagnostics_recording">Recording diagnostics</string>
+    <string name="diagnostics_time_left">Up to %1$d min remaining</string>
+    <string name="diagnostics_log_size">Local log: %1$s</string>
+    <string name="diagnostics_export">Export</string>
+    <string name="diagnostics_clear">Delete</string>
+    <string name="diagnostics_export_failed">Unable to export diagnostic log</string>
 
     <!-- Validation errors -->
     <string name="validation_host_format">Enter a valid IP address or hostname</string>
@@ -67,7 +79,9 @@
     <string name="notification_channel_name">Proxy service</string>
     <string name="notification_channel_desc">Shows proxy status</string>
     <string name="notification_title" translatable="false">TG WS Proxy</string>
-    <string name="notification_running">Proxy running on %1$s:%2$d</string>
+    <string name="notification_running">Traffic: %1$s</string>
+    <string name="notification_restarting">Restarting proxy…</string>
+    <string name="notification_restart">Restart</string>
     <string name="notification_stop">Stop</string>
 
     <!-- Quick Settings tile -->
@@ -79,10 +93,36 @@
     <string name="cf_test_fail">DC%1$d: Error</string>
     <string name="cf_test_best">Best domain: %1$s</string>
     <string name="cf_test_done">Test completed</string>
+    <string name="cf_test_no_domains">CF proxy is disabled or no domains are available</string>
+
+    <!-- Common UI -->
+    <string name="navigate_back">Back</string>
+    <string name="telegram_not_found">Telegram is not installed</string>
+    <string name="notification_permission_required">Notification permission is required for the foreground service</string>
+    <string name="update_check_now">Check for updates</string>
+    <string name="update_checking">Checking for updates…</string>
+    <string name="update_up_to_date">You have the latest version</string>
+    <string name="update_check_failed">Could not check for updates</string>
+    <string name="update_available_title">Update available</string>
+    <string name="update_available_version">Version %1$s is available</string>
+    <string name="update_open">Open</string>
+    <string name="update_open_release">Open release page</string>
+    <string name="update_open_failed">Unable to open the release page</string>
+    <string name="dc_ip_label" translatable="false">DC:IP</string>
+    <string name="github" translatable="false">GitHub</string>
 
     <!-- About screen -->
     <string name="about_title">About</string>
-    <string name="about_version">Version %1$s</string>
-    <string name="about_description">Minimal on-device MTProto proxy for Telegram over WebSocket.</string>
-    <string name="about_based_on">Based on tg-ws-proxy by Flowseal</string>
+    <string name="about_version">Version %1$s (%2$d)</string>
+    <string name="about_description">An on-device MTProto proxy for Telegram with WebSocket transport and automatic Cloudflare/TCP fallback.</string>
+    <string name="about_local_title">Local and private</string>
+    <string name="about_local_text">Runs entirely on your device without root, an account, ads, or analytics.</string>
+    <string name="about_transport_title">Resilient transport</string>
+    <string name="about_transport_text">Uses pooled TLS WebSocket connections with Cloudflare and direct TCP fallback.</string>
+    <string name="about_background_title">Built for background use</string>
+    <string name="about_background_text">Includes a foreground service, notification controls, Quick Settings tile, and live statistics.</string>
+    <string name="about_source_code">Source code</string>
+    <string name="about_license">MIT License</string>
+    <string name="about_based_on">Inspired by tg-ws-proxy by Flowseal. This Android implementation is developed independently.</string>
+    <string name="about_flowseal_project">Original Flowseal project</string>
 </resources>

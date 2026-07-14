@@ -27,6 +27,7 @@ class ConfigRepository(private val context: Context) {
         val CF_PROXY_ENABLED = booleanPreferencesKey("cf_proxy_enabled")
         val CF_PROXY_PRIORITY = booleanPreferencesKey("cf_proxy_priority")
         val CF_PROXY_USER_DOMAIN = stringPreferencesKey("cf_proxy_user_domain")
+        val SHOW_DETAILED_STATS = booleanPreferencesKey("show_detailed_stats")
     }
 
     /**
@@ -74,6 +75,7 @@ class ConfigRepository(private val context: Context) {
                 ?.lowercase()
                 ?.takeIf { dev.minios.tgwsproxy.proxy.CfProxyDomains.isValidDomain(it) }
                 ?: "",
+            showDetailedStats = prefs[Keys.SHOW_DETAILED_STATS] ?: false,
         )
     }
 
@@ -96,6 +98,7 @@ class ConfigRepository(private val context: Context) {
             prefs[Keys.CF_PROXY_ENABLED] = config.cfProxyEnabled
             prefs[Keys.CF_PROXY_PRIORITY] = config.cfProxyPriority
             prefs[Keys.CF_PROXY_USER_DOMAIN] = config.cfProxyUserDomain
+            prefs[Keys.SHOW_DETAILED_STATS] = config.showDetailedStats
         }
     }
 

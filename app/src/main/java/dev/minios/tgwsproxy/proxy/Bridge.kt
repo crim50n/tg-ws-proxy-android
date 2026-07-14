@@ -1,6 +1,7 @@
 package dev.minios.tgwsproxy.proxy
 
 import android.util.Log
+import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.selects.select
 import java.io.InputStream
@@ -86,6 +87,7 @@ object Bridge {
         protoTag: Int,
         relayInit: ByteArray,
     ): UpstreamConnection = withContext(Dispatchers.IO) {
+        val attemptStartedAt = System.currentTimeMillis()
         val mediaTag = if (isMedia) " media" else ""
         val dcKey = "$dc${if (isMedia) "m" else ""}"
 
@@ -121,6 +123,13 @@ object Bridge {
             if (TgWsProxyServer.globalVerbose) Log.d(TAG, "Pool hit for DC$dc$mediaTag")
             dcFailUntil.remove(dcKey)
             directIpFailUntil.remove(targetIp)
+            DiagnosticLogger.event(
+                "upstream_route_ready",
+                "dc" to dc,
+                "media" to isMedia,
+                "route" to "ws_pool",
+                "elapsedMs" to System.currentTimeMillis() - attemptStartedAt,
+            )
             return@withContext UpstreamConnection(UpstreamType.WEBSOCKET, ws = pooledWs)
         }
         ProxyStats.poolMisses.incrementAndGet()
@@ -131,6 +140,13 @@ object Bridge {
         var allRedirects = true
 
         Log.i(TAG, "DC$dc$mediaTag -> WS direct via $targetIp (timeout=${wsTimeout}ms)")
+        DiagnosticLogger.event(
+            "upstream_attempt",
+            "dc" to dc,
+            "media" to isMedia,
+            "route" to "ws_direct",
+            "timeoutMs" to wsTimeout,
+        )
         try {
             ws = RawWebSocket.connectToDc(
                 dc = dc,
@@ -149,15 +165,37 @@ object Bridge {
                 allRedirects = false
                 Log.w(TAG, "DC$dc$mediaTag WS handshake: ${e.statusLine}")
             }
+            DiagnosticLogger.failure(
+                "upstream_attempt_failed",
+                e,
+                "dc" to dc,
+                "route" to "ws_direct",
+                "stage" to "handshake",
+                "status" to e.statusCode,
+            )
         } catch (e: SocketTimeoutException) {
             ProxyStats.wsErrors.incrementAndGet()
             allRedirects = false
             directIpFailUntil[targetIp] = now + DIRECT_IP_FAIL_COOLDOWN_MS
             Log.w(TAG, "DC$dc$mediaTag WS timeout via $targetIp; IP cooldown enabled")
+            DiagnosticLogger.failure(
+                "upstream_attempt_failed",
+                e,
+                "dc" to dc,
+                "route" to "ws_direct",
+                "stage" to "timeout",
+            )
         } catch (e: Exception) {
             ProxyStats.wsErrors.incrementAndGet()
             allRedirects = false
             Log.w(TAG, "DC$dc$mediaTag WS connect failed: ${e.message}")
+            DiagnosticLogger.failure(
+                "upstream_attempt_failed",
+                e,
+                "dc" to dc,
+                "route" to "ws_direct",
+                "stage" to "connect",
+            )
         }
 
         // WS success
@@ -165,6 +203,13 @@ object Bridge {
             dcFailUntil.remove(dcKey)
             directIpFailUntil.remove(targetIp)
             ProxyStats.connectionsWs.incrementAndGet()
+            DiagnosticLogger.event(
+                "upstream_route_ready",
+                "dc" to dc,
+                "media" to isMedia,
+                "route" to "ws_direct",
+                "elapsedMs" to System.currentTimeMillis() - attemptStartedAt,
+            )
             return@withContext UpstreamConnection(UpstreamType.WEBSOCKET, ws = ws)
         }
 
@@ -210,6 +255,7 @@ object Bridge {
         for (method in methods) {
             when (method) {
                 "cf" -> {
+                    DiagnosticLogger.event("upstream_attempt", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
                     val conn = tryCfProxyFallback(dc, isMedia, config)
                     if (conn != null) return conn
                 }
@@ -218,6 +264,7 @@ object Bridge {
                     // NOT the WS redirect IPs
                     val fallbackIp = MtProtoConstants.DC_IPS[dc]
                     if (fallbackIp != null) {
+                        DiagnosticLogger.event("upstream_attempt", "dc" to dc, "media" to isMedia, "route" to "tcp")
                         Log.i(TAG, "DC$dc$mediaTag -> TCP fallback to $fallbackIp:443")
                         val conn = tryTcpDirect(dc, fallbackIp, config.bufferSize)
                         if (conn != null) return conn
@@ -259,9 +306,17 @@ object Bridge {
                 )
                 CfProxyDomains.setActiveDomain(dc, baseDomain)
                 ProxyStats.connectionsCfProxy.incrementAndGet()
+                DiagnosticLogger.event("upstream_route_ready", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
                 return UpstreamConnection(UpstreamType.CFPROXY, ws = ws)
             } catch (e: Exception) {
                 Log.w(TAG, "DC$dc$mediaTag CF proxy via $baseDomain failed: ${e.message}")
+                DiagnosticLogger.failure(
+                    "upstream_attempt_failed",
+                    e,
+                    "dc" to dc,
+                    "media" to isMedia,
+                    "route" to "cloudflare",
+                )
             }
         }
         return null
@@ -275,9 +330,11 @@ object Bridge {
             socket.receiveBufferSize = bufferSize
             socket.connect(InetSocketAddress(ip, 443), TCP_CONNECT_TIMEOUT_MS)
             ProxyStats.connectionsTcpFallback.incrementAndGet()
+            DiagnosticLogger.event("upstream_route_ready", "dc" to dc, "route" to "tcp")
             UpstreamConnection(UpstreamType.TCP, tcpSocket = socket)
         } catch (e: Exception) {
             Log.w(TAG, "TCP direct to DC $dc ($ip) failed: ${e.message}")
+            DiagnosticLogger.failure("upstream_attempt_failed", e, "dc" to dc, "route" to "tcp")
             null
         }
     }
@@ -442,6 +499,15 @@ object Bridge {
                 MtProtoConstants.humanBytes(upBytes), upPackets,
                 MtProtoConstants.humanBytes(downBytes), downPackets,
             ))
+            DiagnosticLogger.event(
+                "session_completed",
+                "route" to upstream.type,
+                "durationMs" to System.currentTimeMillis() - startTime,
+                "bytesUp" to upBytes,
+                "bytesDown" to downBytes,
+                "packetsUp" to upPackets,
+                "packetsDown" to downPackets,
+            )
         }
     }
 
