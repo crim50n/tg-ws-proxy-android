@@ -10,8 +10,54 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "Bridge"
+
+internal class CfCooldownTracker(
+    private val clock: () -> Long = System::currentTimeMillis,
+) {
+    private data class State(val strikes: Int, val blockedUntil: Long, val lastFailureAt: Long)
+
+    private val states = ConcurrentHashMap<String, State>()
+
+    fun isCoolingDown(domain: String): Boolean = (states[domain]?.blockedUntil ?: 0L) > clock()
+
+    fun markRateLimited(domain: String): Long {
+        val now = clock()
+        val state = states.compute(domain) { _, previous ->
+            val strikes = if (previous != null && now - previous.lastFailureAt <= MAX_COOLDOWN_MS) {
+                previous.strikes + 1
+            } else {
+                1
+            }
+            val delay = cooldownDelayMs(strikes)
+            State(strikes, now + delay, now)
+        }!!
+        return state.blockedUntil - now
+    }
+
+    fun clear(domain: String) {
+        states.remove(domain)
+    }
+
+    fun reset() {
+        states.clear()
+    }
+
+    companion object {
+        private const val BASE_COOLDOWN_MS = 45_000L
+        private const val MAX_COOLDOWN_MS = 300_000L
+
+        internal fun cooldownDelayMs(strikes: Int): Long {
+            var delay = BASE_COOLDOWN_MS
+            repeat((strikes - 1).coerceIn(0, 3)) {
+                delay = (delay * 2).coerceAtMost(MAX_COOLDOWN_MS)
+            }
+            return delay
+        }
+    }
+}
 
 /**
  * Bidirectional bridge between client TCP and upstream WebSocket/TCP.
@@ -32,6 +78,8 @@ object Bridge {
     private const val WS_NORMAL_TIMEOUT_MS = 10_000
     private const val TCP_CONNECT_TIMEOUT_MS = 10_000
     private const val DIRECT_IP_FAIL_COOLDOWN_MS = 60 * 60_000L
+    private const val WS_PING_INTERVAL_MS = 30_000L
+    private const val CF_FALLBACK_PARALLELISM = 2
 
     enum class UpstreamType { WEBSOCKET, CFPROXY, TCP }
 
@@ -41,6 +89,7 @@ object Bridge {
     // DC fail cooldown: timestamp until which WS timeout is reduced
     private val dcFailUntil = ConcurrentHashMap<String, Long>()
     private val directIpFailUntil = ConcurrentHashMap<String, Long>()
+    private val cfCooldowns = CfCooldownTracker()
 
     /**
      * Reset blacklist and cooldown state (called on server restart).
@@ -49,6 +98,7 @@ object Bridge {
         wsBlacklist.clear()
         dcFailUntil.clear()
         directIpFailUntil.clear()
+        cfCooldowns.reset()
     }
 
     /**
@@ -233,7 +283,7 @@ object Bridge {
      * Fallback chain: CF proxy / TCP direct (order based on cfProxyPriority).
      * Matches Python do_fallback().
      */
-    private fun doFallback(
+    private suspend fun doFallback(
         dc: Int,
         isMedia: Boolean,
         config: ProxyConfig,
@@ -279,7 +329,7 @@ object Bridge {
      * CF proxy fallback with multi-domain rotation (matches Python _cfproxy_fallback).
      * Tries active domain first, then others. Updates active domain on success.
      */
-    private fun tryCfProxyFallback(
+    private suspend fun tryCfProxyFallback(
         dc: Int,
         isMedia: Boolean,
         config: ProxyConfig,
@@ -292,40 +342,85 @@ object Bridge {
         }
         if (allDomains.isEmpty()) return null
 
-        Log.i(TAG, "DC$dc$mediaTag -> trying CF proxy")
+        val availableDomains = allDomains.filterNot { cfCooldowns.isCoolingDown(it) }
+        if (availableDomains.isEmpty()) {
+            Log.i(TAG, "DC$dc$mediaTag -> all CF domains are cooling down")
+            return null
+        }
 
-        for (baseDomain in allDomains) {
-            try {
-                val ws = RawWebSocket.connectToDc(
-                    dc = dc,
-                    isMedia = isMedia,
-                    targetIp = baseDomain,
-                    bufferSize = config.bufferSize,
-                    cfProxyDomain = baseDomain,
-                    connectTimeoutMs = WS_NORMAL_TIMEOUT_MS,
-                )
-                CfProxyDomains.setActiveDomain(dc, baseDomain)
-                ProxyStats.connectionsCfProxy.incrementAndGet()
-                DiagnosticLogger.event("upstream_route_ready", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
-                return UpstreamConnection(UpstreamType.CFPROXY, ws = ws)
-            } catch (e: Exception) {
-                Log.w(TAG, "DC$dc$mediaTag CF proxy via $baseDomain failed: ${e.message}")
-                DiagnosticLogger.failure(
-                    "upstream_attempt_failed",
-                    e,
-                    "dc" to dc,
-                    "media" to isMedia,
-                    "route" to "cloudflare",
-                )
+        Log.i(TAG, "DC$dc$mediaTag -> trying CF proxy (${availableDomains.size} available)")
+
+        // Keep the sticky domain fast, then cap the remaining connection pressure at two.
+        val first = tryCfDomain(dc, isMedia, config.bufferSize, availableDomains.first())
+        if (first != null) return cfConnectionReady(dc, isMedia, first.first, first.second)
+
+        for (batch in availableDomains.drop(1).chunked(CF_FALLBACK_PARALLELISM)) {
+            val results = coroutineScope {
+                batch.map { baseDomain ->
+                    async(Dispatchers.IO) {
+                        tryCfDomain(dc, isMedia, config.bufferSize, baseDomain)
+                    }
+                }.awaitAll().filterNotNull()
             }
+            val winner = results.firstOrNull() ?: continue
+            results.drop(1).forEach { (_, ws) -> ws.close() }
+            return cfConnectionReady(dc, isMedia, winner.first, winner.second)
         }
         return null
+    }
+
+    private fun tryCfDomain(
+        dc: Int,
+        isMedia: Boolean,
+        bufferSize: Int,
+        baseDomain: String,
+    ): Pair<String, RawWebSocket>? {
+        val mediaTag = if (isMedia) " media" else ""
+        return try {
+            val ws = RawWebSocket.connectToDc(
+                dc = dc,
+                isMedia = isMedia,
+                targetIp = baseDomain,
+                bufferSize = bufferSize,
+                cfProxyDomain = baseDomain,
+                connectTimeoutMs = WS_NORMAL_TIMEOUT_MS,
+            )
+            cfCooldowns.clear(baseDomain)
+            baseDomain to ws
+        } catch (e: Exception) {
+            if (e is WsHandshakeError && e.statusCode == 429) {
+                val delay = cfCooldowns.markRateLimited(baseDomain)
+                Log.w(TAG, "CF proxy $baseDomain cooling down for ${delay / 1000}s after HTTP 429")
+            }
+            Log.w(TAG, "DC$dc$mediaTag CF proxy via $baseDomain failed: ${e.message}")
+            DiagnosticLogger.failure(
+                "upstream_attempt_failed",
+                e,
+                "dc" to dc,
+                "media" to isMedia,
+                "route" to "cloudflare",
+            )
+            null
+        }
+    }
+
+    private fun cfConnectionReady(
+        dc: Int,
+        isMedia: Boolean,
+        baseDomain: String,
+        ws: RawWebSocket,
+    ): UpstreamConnection {
+        CfProxyDomains.setActiveDomain(dc, baseDomain)
+        ProxyStats.connectionsCfProxy.incrementAndGet()
+        DiagnosticLogger.event("upstream_route_ready", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
+        return UpstreamConnection(UpstreamType.CFPROXY, ws = ws)
     }
 
     private fun tryTcpDirect(dc: Int, ip: String, bufferSize: Int): UpstreamConnection? {
         return try {
             val socket = Socket()
             socket.tcpNoDelay = true
+            socket.keepAlive = true
             socket.sendBufferSize = bufferSize
             socket.receiveBufferSize = bufferSize
             socket.connect(InetSocketAddress(ip, 443), TCP_CONNECT_TIMEOUT_MS)
@@ -364,6 +459,7 @@ object Bridge {
         var downBytes = 0L
         var upPackets = 0L
         var downPackets = 0L
+        val lastActivityAt = AtomicLong(System.currentTimeMillis())
 
         // Send relay init to upstream
         when (upstream.type) {
@@ -393,6 +489,21 @@ object Bridge {
             upstream.tcpSocket!!.getOutputStream()
         } else null
 
+        val pingJob = upstream.ws?.let { ws ->
+            launch(Dispatchers.IO) {
+                while (isActive) {
+                    delay(WS_PING_INTERVAL_MS)
+                    if (System.currentTimeMillis() - lastActivityAt.get() < WS_PING_INTERVAL_MS) continue
+                    try {
+                        ws.sendPing()
+                    } catch (_: Exception) {
+                        ws.close()
+                        break
+                    }
+                }
+            }
+        }
+
         val clientToUpstream = launch(Dispatchers.IO) {
             try {
                 val buf = ByteArray(65536) // Match Python's reader.read(65536)
@@ -411,6 +522,7 @@ object Bridge {
 
                     val data = buf.copyOf(read)
                     ProxyStats.bytesUp.addAndGet(read.toLong())
+                    lastActivityAt.set(System.currentTimeMillis())
                     upBytes += read
                     upPackets++
 
@@ -450,6 +562,7 @@ object Bridge {
                         while (isActive) {
                             val data = upstream.ws!!.readBinary() ?: break
                             ProxyStats.bytesDown.addAndGet(data.size.toLong())
+                            lastActivityAt.set(System.currentTimeMillis())
                             downBytes += data.size
                             downPackets++
 
@@ -468,6 +581,7 @@ object Bridge {
                             val read = tcpInput.read(buf)
                             if (read <= 0) break
                             ProxyStats.bytesDown.addAndGet(read.toLong())
+                            lastActivityAt.set(System.currentTimeMillis())
                             downBytes += read
                             downPackets++
 
@@ -491,6 +605,7 @@ object Bridge {
         } finally {
             clientToUpstream.cancel()
             upstreamToClient.cancel()
+            pingJob?.cancel()
 
             // Log a compact per-session summary.
             val elapsed = (System.currentTimeMillis() - startTime) / 1000.0

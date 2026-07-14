@@ -166,6 +166,7 @@ class ProxyService : Service() {
             } finally {
                 stopNotificationWatchdog()
                 unregisterNetworkCallback()
+                CfProxyDomains.stopBackgroundRefresh()
                 releaseWakeLock()
                 server = null
                 Log.i(TAG, "Server job completed")

@@ -70,6 +70,7 @@ class RawWebSocket private constructor(
             val clampedTimeout = connectTimeoutMs.coerceIn(1, 10000)
             try {
                 socket.tcpNoDelay = true
+                socket.keepAlive = true
                 socket.sendBufferSize = bufferSize
                 socket.receiveBufferSize = bufferSize
                 socket.soTimeout = clampedTimeout
@@ -245,6 +246,11 @@ class RawWebSocket private constructor(
         // Fail before writing to an already closed socket.
         if (closed) throw IOException("WebSocket closed")
         sendFrame(OPCODE_BINARY, data)
+    }
+
+    fun sendPing() {
+        if (closed) throw IOException("WebSocket closed")
+        sendFrame(OPCODE_PING, ByteArray(0))
     }
 
     /**

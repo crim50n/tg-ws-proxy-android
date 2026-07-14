@@ -22,4 +22,16 @@ class DiagnosticRedactorTest {
         assertTrue(DiagnosticRedactor.field("proxyLink", "anything").contains("redacted"))
         assertTrue(DiagnosticRedactor.field("secret", "anything").contains("redacted"))
     }
+
+    @Test
+    fun redactsIpAddressesButKeepsPacketCounters() {
+        val result = DiagnosticRedactor.redact(
+            "failed /149.154.167.41 from 172.16.105.123 and 2001:67c:4e8:f002::a",
+        )
+
+        assertFalse(result.contains("149.154.167.41"))
+        assertFalse(result.contains("172.16.105.123"))
+        assertFalse(result.contains("2001:67c:4e8:f002::a"))
+        assertTrue(DiagnosticRedactor.field("packetsUp", 12) == "12")
+    }
 }

@@ -359,6 +359,8 @@ class TgWsProxyServer(
                 upstream.close()
             }
 
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: java.net.SocketTimeoutException) {
             // A handshake timeout is not a cryptographic failure.
             // Python does NOT increment connections_bad here.

@@ -24,13 +24,17 @@ object DiagnosticRedactor {
     private val proxyLink = Regex("(?i)tg://\\S+")
     private val secretParameter = Regex("(?i)(secret=)[^\\s&]+")
     private val secretHex = Regex("(?i)\\b(?:dd)?[0-9a-f]{32}\\b")
-    private val forbiddenKeys = setOf("secret", "link", "payload", "header", "packet", "data")
+    private val ipv4Address = Regex("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9])")
+    private val ipv6Address = Regex("(?i)(?<![0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-f])")
+    private val forbiddenKeys = setOf("secret", "link", "payload", "header", "data")
 
     fun redact(value: String): String {
         return value
             .replace(proxyLink, "[proxy-link-redacted]")
             .replace(secretParameter, "$1[redacted]")
             .replace(secretHex, "[secret-redacted]")
+            .replace(ipv4Address, "[ip-redacted]")
+            .replace(ipv6Address, "[ip-redacted]")
             .replace('\n', ' ')
             .replace('\r', ' ')
             .take(500)
