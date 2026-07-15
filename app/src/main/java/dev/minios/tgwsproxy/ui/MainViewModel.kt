@@ -16,6 +16,8 @@ import dev.minios.tgwsproxy.BuildConfig
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.data.ConfigRepository
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
+import dev.minios.tgwsproxy.diagnostics.analyzeConnectionMode
+import dev.minios.tgwsproxy.diagnostics.requiresProxyRestart
 import dev.minios.tgwsproxy.proxy.*
 import dev.minios.tgwsproxy.service.ProxyService
 import dev.minios.tgwsproxy.update.UpdateRepository
@@ -26,12 +28,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val configRepo = ConfigRepository(application)
     private val updateRepository = UpdateRepository(application)
+    private val _configLoaded = MutableStateFlow(false)
 
     val config: StateFlow<ProxyConfig> = configRepo.configFlow
+        .onEach { _configLoaded.value = true }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ProxyConfig())
+    val configLoaded: StateFlow<Boolean> = _configLoaded.asStateFlow()
 
     private val _isRunning = MutableStateFlow(false)
     val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+    val runtimeRouteMode = ProxyService.runtimeRouteMode
 
     private val _stats = MutableStateFlow(StatsSnapshot())
     val stats: StateFlow<StatsSnapshot> = _stats.asStateFlow()
@@ -39,6 +45,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _cfTestResult = MutableStateFlow<String?>(null)
     val cfTestResult: StateFlow<String?> = _cfTestResult.asStateFlow()
     val diagnosticState = DiagnosticLogger.state
+    val diagnosticEntries = DiagnosticLogger.entries
+    val connectionAdvice = combine(config, diagnosticEntries) { currentConfig, entries ->
+        if (currentConfig.autoOptimizeConnection) {
+            null
+        } else {
+            analyzeConnectionMode(entries, currentConfig.cfProxyEnabled, currentConfig.cfProxyFirst)
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     private val _updateState = MutableStateFlow(updateRepository.cachedState())
     val updateState: StateFlow<UpdateState> = _updateState.asStateFlow()
 
@@ -47,6 +61,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val toastMessage: SharedFlow<String> = _toastMessage.asSharedFlow()
 
     private var statsJob: Job? = null
+    private var settingsStartConfig: ProxyConfig? = null
 
     init {
         DiagnosticLogger.initialize(application)
@@ -77,18 +92,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveConfig(newConfig: ProxyConfig) {
-        val previousConfig = config.value
         viewModelScope.launch {
             configRepo.saveConfig(newConfig)
-            // Show a restart warning if the proxy is running.
-            val runtimeConfigChanged = previousConfig.copy(
-                showDetailedStats = newConfig.showDetailedStats,
-            ) != newConfig
-            if (_isRunning.value && runtimeConfigChanged) {
-                _toastMessage.tryEmit(
-                    getApplication<Application>().getString(R.string.settings_restart_required)
-                )
+        }
+    }
+
+    fun beginSettings() {
+        if (settingsStartConfig == null) settingsStartConfig = config.value
+    }
+
+    fun finishSettings(latestConfig: ProxyConfig) {
+        val initialConfig = settingsStartConfig ?: config.value
+        settingsStartConfig = null
+        val runtimeChanged = requiresProxyRestart(initialConfig, latestConfig)
+        viewModelScope.launch {
+            configRepo.saveConfig(latestConfig)
+            if (runtimeChanged && (_isRunning.value || ProxyService.isRunning)) {
+                ProxyService.restart(getApplication<Application>())
             }
+        }
+    }
+
+    fun updateAppearance(appTheme: String, dynamicColor: Boolean) {
+        viewModelScope.launch {
+            configRepo.saveAppearance(appTheme, dynamicColor)
         }
     }
 

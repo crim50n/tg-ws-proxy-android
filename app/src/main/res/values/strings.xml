@@ -31,39 +31,54 @@
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>
-    <string name="settings_connection">MTProto Connection</string>
+    <string name="settings_connection">Local proxy</string>
     <string name="settings_host">IP address</string>
     <string name="settings_port">Port</string>
     <string name="settings_secret">Secret</string>
     <string name="settings_copy_secret">Copy secret</string>
     <string name="settings_regenerate_secret">Regenerate secret</string>
-    <string name="settings_dc_section">Telegram Datacenters (DC → IP)</string>
+    <string name="settings_dc_section">Direct WebSocket targets</string>
     <string name="settings_dc_hint">Format: DC:IP (one per line)\nExample: 2:149.154.167.220</string>
-    <string name="settings_cf_section">Cloudflare Proxy</string>
-    <string name="settings_cf_enable">Enable CF Proxy</string>
-    <string name="settings_cf_priority">CF Proxy priority (over TCP)</string>
-    <string name="settings_cf_custom_domain">Custom domain</string>
+    <string name="settings_dc_description">Advanced direct routes for selected Telegram datacenters. Remove a DC to use fallback routes for it.</string>
+    <string name="settings_cf_section">Routing</string>
+    <string name="settings_auto_optimize">Automatic connection mode</string>
+    <string name="settings_auto_optimize_desc">Let Automatic connection mode manage routes, servers, buffer, and pool. Turn it off to show all manual connection settings.</string>
+    <string name="settings_cf_enable">Use Cloudflare</string>
+    <string name="settings_cf_enable_desc">Provides an alternate route when direct connections are restricted</string>
+    <string name="settings_route_priority">Preferred route</string>
+    <string name="settings_route_direct">Direct connection first</string>
+    <string name="settings_route_direct_desc">WebSocket → Cloudflare → TCP. Recommended for most networks.</string>
+    <string name="settings_route_direct_tcp_desc">WebSocket → TCP → Cloudflare. Uses direct routes whenever possible.</string>
+    <string name="settings_route_cf">Cloudflare first</string>
+    <string name="settings_route_cf_desc">Cloudflare → WebSocket → TCP. Try this when media does not load.</string>
+    <string name="settings_cf_priority">Use Cloudflare before TCP fallback</string>
+    <string name="settings_cf_priority_desc">If disabled, direct TCP is tried before Cloudflare</string>
+    <string name="settings_cf_custom_domain">Use a custom Cloudflare domain</string>
+    <string name="settings_cf_custom_domain_desc">Useful when shared domains are rate-limited or unavailable</string>
     <string name="settings_cf_domain_label">Domain</string>
-    <string name="settings_cf_test">Test</string>
+    <string name="settings_cf_test">Check Cloudflare domains</string>
     <string name="settings_cf_testing">Testing…</string>
     <string name="settings_perf_section">Performance</string>
+    <string name="settings_perf_description">The defaults are suitable for most devices. Change these values only for troubleshooting.</string>
     <string name="settings_buf_size">Buffer size (KB)</string>
     <string name="settings_pool_size">WS pool size</string>
-    <string name="settings_save">Save</string>
-    <string name="settings_cancel">Cancel</string>
-    <string name="settings_restart_required">Restart proxy to apply changes</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_mode">Appearance</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_dynamic_color">Adaptive colors</string>
+    <string name="settings_dynamic_color_desc">Use the device Material You palette</string>
     <string name="settings_interface">Interface</string>
     <string name="settings_detailed_stats">Detailed statistics</string>
     <string name="settings_detailed_stats_desc">Show connection, route, pool, and error counters on the main screen</string>
-    <string name="settings_diagnostics">Diagnostics</string>
-    <string name="diagnostics_description">Temporarily records local service and connection events. Traffic contents, proxy links, and secrets are never logged or uploaded.</string>
-    <string name="diagnostics_start">Record for 30 minutes</string>
-    <string name="diagnostics_stop">Stop</string>
-    <string name="diagnostics_recording">Recording diagnostics</string>
+    <string name="diagnostics_start">Save a 5-minute report</string>
+    <string name="diagnostics_stop">Stop saving</string>
+    <string name="diagnostics_recording">Saving diagnostic report</string>
     <string name="diagnostics_time_left">Up to %1$d min remaining</string>
-    <string name="diagnostics_log_size">Local log: %1$s</string>
-    <string name="diagnostics_export">Export</string>
-    <string name="diagnostics_clear">Delete</string>
+    <string name="diagnostics_reproduce_hint">Open Telegram and reproduce the problem: open chats, refresh messages, and load photos or videos. This will add useful events to the report.</string>
+    <string name="diagnostics_export">Share log</string>
+    <string name="diagnostics_clear">Delete saved report</string>
     <string name="diagnostics_export_failed">Unable to export diagnostic log</string>
 
     <!-- Validation errors -->
@@ -78,6 +93,8 @@
     <!-- Notification -->
     <string name="notification_channel_name">Proxy service</string>
     <string name="notification_channel_desc">Shows proxy status</string>
+    <string name="notification_advice_channel_name">Connection recommendations</string>
+    <string name="notification_advice_channel_desc">Shows route recommendations when Automatic connection mode is off</string>
     <string name="notification_title" translatable="false">TG WS Proxy</string>
     <string name="notification_running">Traffic: %1$s</string>
     <string name="notification_restarting">Restarting proxy…</string>
@@ -87,6 +104,7 @@
     <!-- Quick Settings tile -->
     <string name="tile_active">Running</string>
     <string name="tile_inactive">Stopped</string>
+    <string name="runtime_route">Route: %1$s</string>
 
     <!-- CF proxy test -->
     <string name="cf_test_success">DC%1$d: OK (%2$dms)</string>
@@ -97,6 +115,7 @@
 
     <!-- Common UI -->
     <string name="navigate_back">Back</string>
+    <string name="more_options">More options</string>
     <string name="telegram_not_found">Telegram is not installed</string>
     <string name="notification_permission_required">Notification permission is required for the foreground service</string>
     <string name="update_check_now">Check for updates</string>
@@ -110,6 +129,40 @@
     <string name="update_open_failed">Unable to open the release page</string>
     <string name="dc_ip_label" translatable="false">DC:IP</string>
     <string name="github" translatable="false">GitHub</string>
+
+    <!-- Event log -->
+    <string name="log_title">Connection log</string>
+    <string name="log_not_recording">Live events</string>
+    <string name="log_start_hint">Events are shown in memory and are not saved to a file</string>
+    <string name="log_empty">No connection events yet</string>
+    <string name="connection_advice_title">Network recommendation</string>
+    <string name="connection_advice_enable_cf">Direct connections repeatedly time out on this network. Cloudflare is recommended.</string>
+    <string name="connection_advice_cf_first">Direct connections repeatedly time out while Cloudflare is stable. Cloudflare first is recommended.</string>
+    <string name="connection_advice_direct_first">Cloudflare repeatedly fails while direct connections are stable. Direct connection first is recommended.</string>
+
+    <!-- Help -->
+    <string name="help_title">Help</string>
+    <string name="help_intro">This guide describes how the proxy works, what each setting changes, and how to diagnose connection problems.</string>
+    <string name="help_overview_title">How the app works</string>
+    <string name="help_overview_text">Telegram connects to a local MTProto proxy on this device. The app reads the requested Telegram datacenter and forwards the encrypted connection through direct WebSocket, Cloudflare, or direct TCP. It performs lightweight route checks after startup and network changes. The active route order is shown on the main screen. Traffic contents are not decrypted by the interface or written to the connection log.</string>
+    <string name="help_quick_start_title">Initial setup</string>
+    <string name="help_quick_start_text">1. Start the proxy on the main screen.\n2. Tap “Open in Telegram.”\n3. Confirm the proxy in Telegram.\n4. Keep the service notification enabled.\n\nSettings are saved automatically. A running proxy restarts after leaving settings only when connection settings actually changed.</string>
+    <string name="help_mode_title">Connection modes</string>
+    <string name="help_mode_text">“Automatic connection mode” starts each proxy run and each new network with WebSocket → Cloudflare → TCP and a pool size of 4. If it temporarily selects Cloudflare → WebSocket → TCP, the direct WebSocket pool is disabled. The buffer remains at the safe 256 KB default. Manual connection controls are hidden, and the active route order is shown on the main screen. Automatic decisions never overwrite manual settings.\n\nTurn “Automatic connection mode” off to reveal all routing, server, Cloudflare domain, DC:IP, buffer, and pool settings. In manual mode the app may show a recommendation, but it never applies it or restarts the proxy because of it.</string>
+    <string name="help_cf_title">Cloudflare settings</string>
+    <string name="help_cf_text">These controls are available when “Automatic connection mode” is off. “Use Cloudflare” enables the alternate route. The fallback switch chooses whether Cloudflare or direct TCP is tried first after direct WebSocket fails.\n\nUse the domain check when Cloudflare connections fail. HTTP 429 means a shared domain reached its connection limit; the app temporarily skips it. Configure a custom domain only when the shared domain pool is consistently unavailable.</string>
+    <string name="help_dc_title">Direct WebSocket targets</string>
+    <string name="help_dc_text">These controls are available when “Automatic connection mode” is off. A DC:IP line enables direct WebSocket for one Telegram datacenter. Telegram selects the datacenter automatically; the app only selects its route. Removing a line makes that datacenter use Cloudflare or TCP instead. Leave the default list unchanged unless you are isolating a routing problem or following a support instruction.</string>
+    <string name="help_advanced_title">Performance settings</string>
+    <string name="help_advanced_text">These controls are available when “Automatic connection mode” is off. The pool keeps direct WebSocket connections ready to reduce startup delay. The buffer controls socket memory used during transfers. The default pool size and 256 KB buffer are suitable for most devices. Lower the pool only to reduce memory and connection usage. Do not increase these values without a measured reason.</string>
+    <string name="help_theme_title">Theme and appearance</string>
+    <string name="help_theme_text">Choose System, Light, or Dark appearance. On Android 12 and newer, adaptive colors use the Material You palette generated from the device wallpaper. Appearance changes are applied and saved automatically.</string>
+    <string name="help_log_title">Connection log</string>
+    <string name="help_log_text">The screen always shows the latest 300 events in memory without writing them to a file. To create an exportable report, start 5-minute saving before reproducing a problem. Traffic contents are not recorded. Exported reports hide proxy links, secrets, and IP addresses. Deleting a saved report does not clear the events shown on screen.</string>
+    <string name="help_troubleshooting_title">Troubleshooting</string>
+    <string name="help_troubleshooting_text">Media does not load with “Automatic connection mode”: check the active route on the main screen, then reproduce the problem in Telegram so the app can observe real connections.\n\nMedia does not load in manual mode: select Cloudflare first and leave settings to apply the change.\n\nCloudflare fails: turn “Automatic connection mode” off, run the domain check, and look for HTTP 429 in the connection log.\n\nConnections stop with the screen off: allow background operation and disable battery optimization for the app.\n\nProblem persists: start saving a report, reproduce the issue, then share the exported file.</string>
+    <string name="help_background_title">Background operation</string>
+    <string name="help_background_text">Keep the foreground-service notification enabled. Some Android vendors may still restrict background networking; exclude the app from battery optimization if connections stop when the screen is off.</string>
 
     <!-- About screen -->
     <string name="about_title">About</string>

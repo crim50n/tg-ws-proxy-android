@@ -15,12 +15,16 @@ require root, an external proxy server, an account, analytics, or ads.
 - Direct WebSocket transport with per-DC connection pools
 - Validated Cloudflare domain pool with per-DC sticky balancing
 - Configurable Cloudflare-first or TCP-first fallback order
-- Automatic pool reset and warmup after network changes
+- Optional Cloudflare-first routing for every Telegram DC
+- Automatic per-network route selection with lightweight direct/Cloudflare/TCP probes
+- Route-aware direct WebSocket pooling and automatic reset after network changes
 - Foreground service, wake lock, notification restart/stop actions, and Quick Settings tile
 - Abridged, intermediate, and padded-intermediate MTProto framing
 - English and Russian UI
-- Runtime traffic, connection, fallback, error, and pool statistics
-- Optional time-limited local diagnostic log with explicit export and redaction
+- Optional detailed connection, traffic, route, error, and pool statistics
+- In-memory live connection log and explicit five-minute diagnostic report export
+- System, Light, Dark, and Android 12+ Material You appearance
+- Built-in English and Russian help for routing and diagnostics
 - Daily update notification with a static repository manifest fallback
 - Strict configuration validation and persistent DataStore settings
 
@@ -47,12 +51,58 @@ the local network; clients still need the generated secret.
 | Host | `127.0.0.1` | Local listen address or hostname |
 | Port | `1443` | MTProto listener port |
 | Secret | Random | Persisted 16-byte secret shown as 32 hexadecimal characters |
-| DC redirects | DC 2 and 4 | `DC:IP` WebSocket target mappings |
-| CF proxy | Enabled, first | Cloudflare domain fallback and priority |
-| Pool size | `4` | Pre-established connections per DC and media mode, `0..16` |
-| Buffer size | `256 KB` | Socket buffer size, `4..4096 KB` |
+| Automatic connection mode | Enabled | Selects a temporary route for the current network without overwriting manual settings |
+| DC redirects | DC 2 and 4 | Manual-mode `DC:IP` WebSocket target mappings |
+| CF proxy | Enabled, before TCP | Manual-mode Cloudflare fallback before direct TCP |
+| CF first | Disabled | Manual-mode Cloudflare priority for every Telegram DC |
+| Pool size | `4` | Manual-mode pre-established connections per DC and media mode, `0..16` |
+| Buffer size | `256 KB` | Manual-mode socket buffer size, `4..4096 KB` |
 
-Saved settings apply after the running proxy is restarted.
+Automatic mode starts each proxy run and network with `WS -> CF -> TCP`, a
+256 KB socket buffer, and a direct WebSocket pool of 4. When it selects
+`CF -> WS -> TCP`, direct pool warmup is disabled. Turn automatic mode off to
+show all manual routing, server, buffer, and pool controls.
+
+Settings are saved automatically. Leaving Settings restarts a running proxy
+only when effective connection settings changed.
+
+### Automatic Connection Mode
+
+Automatic connection mode is enabled by default. Each proxy start and each
+validated network handover begins with this route order:
+
+```text
+WS -> Cloudflare -> TCP
+```
+
+The app runs two lightweight direct WebSocket, Cloudflare, and TCP reachability
+rounds for DC 2 and DC 4. Probe results are isolated per runtime so a delayed
+result from an old network cannot change a replacement runtime. Probes do not
+contain Telegram account data and are not included in user traffic counters.
+
+Repeated direct failures with successful Cloudflare checks can temporarily
+select `Cloudflare -> WS -> TCP` for the current runtime. Any successful direct
+WebSocket observation prevents that automatic switch. Automatic decisions are
+not written to DataStore and do not overwrite manual settings. The effective
+route order is displayed on the main screen.
+
+Automatic performance defaults are route-aware:
+
+- `WS -> Cloudflare -> TCP`: 256 KB socket buffer and direct WS pool size 4
+- `Cloudflare -> WS -> TCP`: 256 KB socket buffer and direct WS pool disabled
+
+Turn automatic connection mode off to expose every manual routing, server,
+Cloudflare domain, buffer, and pool setting. In manual mode the app may display
+or notify a recommendation, but it never applies the recommendation or restarts
+the proxy because of it.
+
+### Diagnostics
+
+The Connection log always keeps the latest 300 redacted events in memory. It
+does not continuously write them to storage. Start a diagnostic report
+explicitly to record up to five minutes for export. Reports redact proxy links,
+secrets, IPv4 addresses, and IPv6 addresses. Deleting a saved report does not
+clear the in-memory events shown on screen.
 
 ## Update Checks
 
@@ -76,7 +126,7 @@ and the matching values and tag URL in `update.json` before publishing the tag.
 
 ## Transport Behavior
 
-The traffic path is:
+The default traffic path is:
 
 ```text
 Telegram -> local MTProto listener -> direct WSS -> Cloudflare WSS -> Telegram TCP
@@ -85,8 +135,11 @@ Telegram -> local MTProto listener -> direct WSS -> Cloudflare WSS -> Telegram T
 The direct WebSocket path connects to the configured redirect IP while using a
 Telegram domain for TLS SNI and the HTTP `Host` header. WebSocket frames and
 buffered MTProto packets are limited to 16 MiB to prevent unbounded allocation.
-Pools are discarded after a network handover so connections from a previous
-Wi-Fi or mobile route cannot be reused.
+Pools and active sessions are discarded after a validated Wi-Fi, cellular, VPN,
+or Ethernet handover so connections from the previous network cannot be reused.
+Automatic mode then starts from the default route order and reevaluates the new
+network. Manual mode keeps the configured route and rebuilds only its direct WS
+pool.
 
 TLS certificate verification for proxy WebSocket traffic is intentionally
 disabled to preserve the upstream transport behavior used for IP redirection

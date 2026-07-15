@@ -26,8 +26,12 @@ class ConfigRepository(private val context: Context) {
         val POOL_SIZE = intPreferencesKey("pool_size")
         val CF_PROXY_ENABLED = booleanPreferencesKey("cf_proxy_enabled")
         val CF_PROXY_PRIORITY = booleanPreferencesKey("cf_proxy_priority")
+        val CF_PROXY_FIRST = booleanPreferencesKey("cf_proxy_first")
+        val AUTO_OPTIMIZE_CONNECTION = booleanPreferencesKey("auto_optimize_connection")
         val CF_PROXY_USER_DOMAIN = stringPreferencesKey("cf_proxy_user_domain")
         val SHOW_DETAILED_STATS = booleanPreferencesKey("show_detailed_stats")
+        val APP_THEME = stringPreferencesKey("app_theme")
+        val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
     }
 
     /**
@@ -70,12 +74,16 @@ class ConfigRepository(private val context: Context) {
             poolSize = (prefs[Keys.POOL_SIZE] ?: 4).coerceIn(0, 16),
             cfProxyEnabled = prefs[Keys.CF_PROXY_ENABLED] ?: true,
             cfProxyPriority = prefs[Keys.CF_PROXY_PRIORITY] ?: true,
+            cfProxyFirst = prefs[Keys.CF_PROXY_FIRST] ?: false,
+            autoOptimizeConnection = prefs[Keys.AUTO_OPTIMIZE_CONNECTION] ?: true,
             cfProxyUserDomain = prefs[Keys.CF_PROXY_USER_DOMAIN]
                 ?.trim()
                 ?.lowercase()
                 ?.takeIf { dev.minios.tgwsproxy.proxy.CfProxyDomains.isValidDomain(it) }
                 ?: "",
             showDetailedStats = prefs[Keys.SHOW_DETAILED_STATS] ?: false,
+            appTheme = prefs[Keys.APP_THEME]?.takeIf { it in setOf("system", "light", "dark") } ?: "system",
+            dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true,
         )
     }
 
@@ -97,8 +105,19 @@ class ConfigRepository(private val context: Context) {
             prefs[Keys.POOL_SIZE] = config.poolSize
             prefs[Keys.CF_PROXY_ENABLED] = config.cfProxyEnabled
             prefs[Keys.CF_PROXY_PRIORITY] = config.cfProxyPriority
+            prefs[Keys.CF_PROXY_FIRST] = config.cfProxyFirst
+            prefs[Keys.AUTO_OPTIMIZE_CONNECTION] = config.autoOptimizeConnection
             prefs[Keys.CF_PROXY_USER_DOMAIN] = config.cfProxyUserDomain
             prefs[Keys.SHOW_DETAILED_STATS] = config.showDetailedStats
+            prefs[Keys.APP_THEME] = config.appTheme
+            prefs[Keys.DYNAMIC_COLOR] = config.dynamicColor
+        }
+    }
+
+    suspend fun saveAppearance(appTheme: String, dynamicColor: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.APP_THEME] = appTheme
+            prefs[Keys.DYNAMIC_COLOR] = dynamicColor
         }
     }
 

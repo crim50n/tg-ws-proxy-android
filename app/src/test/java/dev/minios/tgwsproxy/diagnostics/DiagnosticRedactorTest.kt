@@ -34,4 +34,14 @@ class DiagnosticRedactorTest {
         assertFalse(result.contains("2001:67c:4e8:f002::a"))
         assertTrue(DiagnosticRedactor.field("packetsUp", 12) == "12")
     }
+
+    @Test
+    fun parsesPersistedEntryForLiveLog() {
+        val entry = parseDiagnosticLine(
+            "2026-07-14T22:42:42.128+0300\tupstream_route_ready dc=2 ip=149.154.167.220 route=ws_pool",
+        )
+
+        assertTrue(entry?.event == "upstream_route_ready")
+        assertFalse(entry?.details.orEmpty().contains("149.154.167.220"))
+    }
 }

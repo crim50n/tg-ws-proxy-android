@@ -10,14 +10,20 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.collectLatest
 import dev.minios.tgwsproxy.R
+import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.ui.screens.MainScreen
 import dev.minios.tgwsproxy.ui.screens.SettingsScreen
 import dev.minios.tgwsproxy.ui.screens.AboutScreen
+import dev.minios.tgwsproxy.ui.screens.HelpScreen
+import dev.minios.tgwsproxy.ui.screens.LogScreen
 import dev.minios.tgwsproxy.ui.theme.TgWsProxyTheme
 
 class MainActivity : ComponentActivity() {
@@ -44,9 +50,28 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            TgWsProxyTheme {
-                val viewModel: MainViewModel = viewModel()
-                AppNavigation(viewModel = viewModel)
+            val viewModel: MainViewModel = viewModel()
+            val config by viewModel.config.collectAsState()
+            val configLoaded by viewModel.configLoaded.collectAsState()
+            val systemDark = isSystemInDarkTheme()
+            TgWsProxyTheme(
+                darkTheme = when (config.appTheme) {
+                    "light" -> false
+                    "dark" -> true
+                    else -> systemDark
+                },
+                dynamicColor = config.dynamicColor,
+            ) {
+                if (configLoaded) {
+                    AppNavigation(viewModel = viewModel)
+                } else {
+                    androidx.compose.foundation.layout.Box(
+                        modifier = androidx.compose.ui.Modifier.fillMaxSize(),
+                        contentAlignment = androidx.compose.ui.Alignment.Center,
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator()
+                    }
+                }
             }
         }
     }
@@ -56,9 +81,12 @@ class MainActivity : ComponentActivity() {
 private fun AppNavigation(viewModel: MainViewModel) {
     val config by viewModel.config.collectAsState()
     val isRunning by viewModel.isRunning.collectAsState()
+    val runtimeRouteMode by viewModel.runtimeRouteMode.collectAsState()
     val stats by viewModel.stats.collectAsState()
     val cfTestResult by viewModel.cfTestResult.collectAsState()
     val diagnosticState by viewModel.diagnosticState.collectAsState()
+    val diagnosticEntries by viewModel.diagnosticEntries.collectAsState()
+    val connectionAdvice by viewModel.connectionAdvice.collectAsState()
     val updateState by viewModel.updateState.collectAsState()
 
     // Handle transient messages from the view model.
@@ -69,8 +97,9 @@ private fun AppNavigation(viewModel: MainViewModel) {
         }
     }
 
-    var currentScreen by remember { mutableStateOf<Screen>(Screen.Main) }
-    val closeSettings = {
+    var currentScreen by rememberSaveable { mutableStateOf(Screen.Main) }
+    val closeSettings: (ProxyConfig) -> Unit = { latestConfig ->
+        viewModel.finishSettings(latestConfig)
         viewModel.clearCfTestResult()
         currentScreen = Screen.Main
     }
@@ -80,35 +109,37 @@ private fun AppNavigation(viewModel: MainViewModel) {
             MainScreen(
                 config = config,
                 isRunning = isRunning,
+                runtimeRouteMode = runtimeRouteMode,
                 stats = stats,
+                connectionAdvice = connectionAdvice,
                 updateState = updateState,
                 onStart = { viewModel.startProxy() },
                 onStop = { viewModel.stopProxy() },
                 onOpenInTelegram = { viewModel.openInTelegram() },
                 onCopyLink = { viewModel.copyProxyLink() },
-                onOpenSettings = { currentScreen = Screen.Settings },
+                onOpenSettings = {
+                    viewModel.beginSettings()
+                    currentScreen = Screen.Settings
+                },
+                onOpenLogs = { currentScreen = Screen.Logs },
+                onOpenHelp = { currentScreen = Screen.Help },
                 onOpenAbout = { currentScreen = Screen.About },
                 onOpenUpdate = { viewModel.openAvailableUpdate() },
             )
         }
         Screen.Settings -> {
-            BackHandler(onBack = closeSettings)
+            LaunchedEffect(Unit) { viewModel.beginSettings() }
             SettingsScreen(
                 config = config,
                 cfTestResult = cfTestResult,
-                diagnosticState = diagnosticState,
-                onSave = { newConfig ->
-                    viewModel.saveConfig(newConfig)
-                    closeSettings()
-                },
-                onBack = closeSettings,
+                onConfigChange = { viewModel.saveConfig(it) },
+                onExit = closeSettings,
                 onRegenerateSecret = { viewModel.regenerateSecret() },
                 onCopySecret = { viewModel.copySecret(it) },
                 onTestCfProxy = { viewModel.testCfProxy() },
-                onStartDiagnostics = { viewModel.startDiagnostics() },
-                onStopDiagnostics = { viewModel.stopDiagnostics() },
-                onExportDiagnostics = { viewModel.exportDiagnostics() },
-                onClearDiagnostics = { viewModel.clearDiagnostics() },
+                onAppearanceChange = { appTheme, dynamicColor ->
+                    viewModel.updateAppearance(appTheme, dynamicColor)
+                },
             )
         }
         Screen.About -> {
@@ -120,11 +151,23 @@ private fun AppNavigation(viewModel: MainViewModel) {
                 onBack = { currentScreen = Screen.Main },
             )
         }
+        Screen.Logs -> {
+            BackHandler { currentScreen = Screen.Main }
+            LogScreen(
+                entries = diagnosticEntries,
+                diagnosticState = diagnosticState,
+                onStartDiagnostics = { viewModel.startDiagnostics() },
+                onStopDiagnostics = { viewModel.stopDiagnostics() },
+                onExportDiagnostics = { viewModel.exportDiagnostics() },
+                onClearDiagnostics = { viewModel.clearDiagnostics() },
+                onBack = { currentScreen = Screen.Main },
+            )
+        }
+        Screen.Help -> {
+            BackHandler { currentScreen = Screen.Main }
+            HelpScreen(onBack = { currentScreen = Screen.Main })
+        }
     }
 }
 
-private sealed class Screen {
-    data object Main : Screen()
-    data object Settings : Screen()
-    data object About : Screen()
-}
+private enum class Screen { Main, Settings, About, Logs, Help }

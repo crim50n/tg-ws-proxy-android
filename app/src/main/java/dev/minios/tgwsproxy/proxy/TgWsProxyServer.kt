@@ -53,7 +53,7 @@ class TgWsProxyServer(
         if (!isRunning) return
         Log.i(TAG, "Network changed, rebuilding WebSocket pool")
         Bridge.resetState()
-        wsPool?.resetAndWarm(config.dcRedirects)
+        wsPool?.resetAndWarm(directWarmupRedirects())
     }
 
     /**
@@ -85,12 +85,12 @@ class TgWsProxyServer(
                 bufferSize = config.bufferSize,
             ).also {
                 it.start(scope!!)
-                it.warmUp(config.dcRedirects)
+                it.warmUp(directWarmupRedirects())
             }
             DiagnosticLogger.event(
                 "pool_warmup_started",
                 "poolSize" to config.poolSize,
-                "dcCount" to config.dcRedirects.size,
+                "dcCount" to directWarmupRedirects().size,
             )
 
             // CF domain refresh is owned by ProxyService.
@@ -242,11 +242,21 @@ class TgWsProxyServer(
             Log.i(TAG, "    DC$dc: ${config.dcRedirects[dc]}")
         }
         if (config.cfProxyEnabled) {
-            val prio = if (config.cfProxyPriority) "CF first" else "TCP first"
+            val route = if (config.cfProxyFirst) {
+                "all DCs via CF first"
+            } else if (config.cfProxyPriority) {
+                "CF before TCP fallback"
+            } else {
+                "TCP before CF fallback"
+            }
             val domainType = if (config.cfProxyUserDomain.isNotBlank()) "user" else "auto"
-            Log.i(TAG, "  CF proxy:      enabled ($prio | $domainType)")
+            Log.i(TAG, "  CF proxy:      enabled ($route | $domainType)")
         }
         Log.i(TAG, sep)
+    }
+
+    private fun directWarmupRedirects(): Map<Int, String> {
+        return if (config.cfProxyEnabled && config.cfProxyFirst) emptyMap() else config.dcRedirects
     }
 
     private suspend fun handleClient(clientSocket: Socket) {

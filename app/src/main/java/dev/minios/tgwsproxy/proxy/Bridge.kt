@@ -122,9 +122,9 @@ object Bridge {
 
     /**
      * Establish upstream connection with fallback chain matching Python:
-     * 1. Check WS blacklist / DC not in config -> skip WS, go to fallback
-     * 2. Try WS pool hit
-     * 3. Try WS direct with adaptive timeout
+     * 1. Optionally try CF before every direct route
+     * 2. Check WS blacklist / DC not in config -> skip WS, go to fallback
+     * 3. Try WS pool hit, then direct WS with an adaptive timeout
      * 4. On WS failure -> update blacklist/cooldown -> fallback (CF proxy / TCP)
      *
      * #1 FIX: Removed outer domain loop — connectToDc() handles domain iteration internally.
@@ -140,6 +140,13 @@ object Bridge {
         val attemptStartedAt = System.currentTimeMillis()
         val mediaTag = if (isMedia) " media" else ""
         val dcKey = "$dc${if (isMedia) "m" else ""}"
+        val cfAttempted = config.cfProxyEnabled && config.cfProxyFirst
+
+        if (cfAttempted) {
+            DiagnosticLogger.event("upstream_attempt", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
+            val conn = tryCfProxyFallback(dc, isMedia, config)
+            if (conn != null) return@withContext conn
+        }
 
         // If DC not in config or WS blacklisted -> skip WS, go straight to fallback
         val targetIp = config.dcRedirects[dc]
@@ -149,7 +156,7 @@ object Bridge {
             } else {
                 Log.i(TAG, "DC$dc$mediaTag WS blacklisted -> fallback")
             }
-            val conn = doFallback(dc, isMedia, config, protoTag, relayInit)
+            val conn = doFallback(dc, isMedia, config, protoTag, relayInit, allowCf = !cfAttempted)
             if (conn != null) return@withContext conn
             throw ProxyException("DC$dc$mediaTag no fallback available")
         }
@@ -159,7 +166,7 @@ object Bridge {
         val ipFailUntil = directIpFailUntil[targetIp] ?: 0L
         if (config.cfProxyEnabled && now < ipFailUntil) {
             Log.i(TAG, "Direct WS IP $targetIp is cooling down -> fallback")
-            val conn = doFallback(dc, isMedia, config, protoTag, relayInit)
+            val conn = doFallback(dc, isMedia, config, protoTag, relayInit, allowCf = !cfAttempted)
             if (conn != null) return@withContext conn
         }
         val failUntil = dcFailUntil[dcKey] ?: 0L
@@ -273,7 +280,7 @@ object Bridge {
         }
 
         // 3. Fallback (CF proxy / TCP)
-        val conn = doFallback(dc, isMedia, config, protoTag, relayInit)
+        val conn = doFallback(dc, isMedia, config, protoTag, relayInit, allowCf = !cfAttempted)
         if (conn != null) return@withContext conn
 
         throw ProxyException("All upstream connection attempts failed for DC $dc")
@@ -289,12 +296,13 @@ object Bridge {
         config: ProxyConfig,
         protoTag: Int,
         relayInit: ByteArray,
+        allowCf: Boolean = true,
     ): UpstreamConnection? {
         val mediaTag = if (isMedia) " media" else ""
         val methods = mutableListOf<String>()
         methods.add("tcp")
 
-        if (config.cfProxyEnabled) {
+        if (config.cfProxyEnabled && allowCf) {
             if (config.cfProxyPriority) {
                 methods.add(0, "cf")  // CF before TCP
             } else {

@@ -29,7 +29,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.BuildConfig
 import dev.minios.tgwsproxy.R
-import dev.minios.tgwsproxy.ui.theme.TgBlue
 import dev.minios.tgwsproxy.update.UpdateState
 
 private const val PROJECT_URL = "https://github.com/crim50n/tg-ws-proxy-android"
@@ -66,9 +65,9 @@ fun AboutScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = TgBlue,
-                    titleContentColor = androidx.compose.ui.graphics.Color.White,
-                    navigationIconContentColor = androidx.compose.ui.graphics.Color.White,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
                 ),
             )
         },
@@ -86,7 +85,7 @@ fun AboutScreen(
                 modifier = Modifier
                     .size(88.dp)
                     .clip(RoundedCornerShape(24.dp))
-                    .background(TgBlue),
+                    .background(MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center,
             ) {
                 Image(
@@ -105,7 +104,7 @@ fun AboutScreen(
                 Spacer(modifier = Modifier.height(6.dp))
                 Surface(
                     shape = RoundedCornerShape(50),
-                    color = TgBlue.copy(alpha = 0.12f),
+                    color = MaterialTheme.colorScheme.primaryContainer,
                 ) {
                     Text(
                         text = stringResource(
@@ -115,7 +114,7 @@ fun AboutScreen(
                         ),
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         style = MaterialTheme.typography.labelLarge,
-                        color = TgBlue,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
                     )
                 }
             }
@@ -250,7 +249,7 @@ private fun UpdateCheckCard(
                         R.string.update_available_version,
                         updateState.release.versionName,
                     ),
-                    color = TgBlue,
+                    color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium,
                 )
             }
@@ -258,7 +257,7 @@ private fun UpdateCheckCard(
                 Button(
                     onClick = onOpenUpdate,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     shape = RoundedCornerShape(12.dp),
                 ) {
                     Text(stringResource(R.string.update_open_release))
@@ -288,13 +287,13 @@ private fun AboutFeature(icon: ImageVector, title: String, text: String) {
         Surface(
             modifier = Modifier.size(40.dp),
             shape = RoundedCornerShape(12.dp),
-            color = TgBlue.copy(alpha = 0.12f),
+            color = MaterialTheme.colorScheme.primaryContainer,
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     icon,
                     contentDescription = null,
-                    tint = TgBlue,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                     modifier = Modifier.size(22.dp),
                 )
             }

@@ -8,6 +8,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,9 +23,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
+import dev.minios.tgwsproxy.diagnostics.ConnectionAdvice
 import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.proxy.StatsSnapshot
+import dev.minios.tgwsproxy.proxy.RuntimeRouteMode
 import dev.minios.tgwsproxy.ui.theme.*
 import dev.minios.tgwsproxy.update.UpdateState
 
@@ -32,33 +36,69 @@ import dev.minios.tgwsproxy.update.UpdateState
 fun MainScreen(
     config: ProxyConfig,
     isRunning: Boolean,
+    runtimeRouteMode: RuntimeRouteMode?,
     stats: StatsSnapshot,
+    connectionAdvice: ConnectionAdvice?,
     updateState: UpdateState,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpenInTelegram: () -> Unit,
     onCopyLink: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenLogs: () -> Unit,
+    onOpenHelp: () -> Unit,
     onOpenAbout: () -> Unit,
     onOpenUpdate: () -> Unit,
 ) {
     val proxyLink = remember(config) { config.proxyLink() }
+    var menuExpanded by remember { mutableStateOf(false) }
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = TgBlue,
-                    titleContentColor = androidx.compose.ui.graphics.Color.White,
-                    actionIconContentColor = androidx.compose.ui.graphics.Color.White,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary,
                 ),
                 actions = {
-                    IconButton(onClick = onOpenAbout) {
-                        Icon(Icons.Default.Info, contentDescription = stringResource(R.string.about_title))
-                    }
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings))
+                    }
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.log_title)) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onOpenLogs()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.help_title)) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onOpenHelp()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.about_title)) },
+                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onOpenAbout()
+                                },
+                            )
+                        }
                     }
                 },
             )
@@ -93,9 +133,23 @@ fun MainScreen(
                 isRunning = isRunning,
                 config = config,
                 uptimeSeconds = stats.uptimeSeconds,
+                runtimeRouteMode = runtimeRouteMode,
             )
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            AnimatedVisibility(
+                visible = isRunning && connectionAdvice != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                if (connectionAdvice != null) {
+                    Column {
+                        ConnectionAdviceCard(connectionAdvice)
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                }
+            }
 
             ControlsCard(
                 isRunning = isRunning,
@@ -106,27 +160,52 @@ fun MainScreen(
                 proxyLink = proxyLink,
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
-
             AnimatedVisibility(
-                visible = isRunning,
+                visible = isRunning && config.showDetailedStats,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically(),
             ) {
                 Column {
-                    TrafficCard(stats = stats)
-                    AnimatedVisibility(
-                        visible = config.showDetailedStats,
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically(),
-                    ) {
-                        Column {
-                            Spacer(modifier = Modifier.height(12.dp))
-                            StatsCard(stats = stats)
-                        }
-                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    StatsCard(stats = stats)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionAdviceCard(advice: ConnectionAdvice) {
+    val message = when (advice) {
+        ConnectionAdvice.ENABLE_CLOUDFLARE -> R.string.connection_advice_enable_cf
+        ConnectionAdvice.USE_CLOUDFLARE_FIRST -> R.string.connection_advice_cf_first
+        ConnectionAdvice.USE_DIRECT_FIRST -> R.string.connection_advice_direct_first
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.NetworkCheck,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.connection_advice_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(message),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onTertiaryContainer,
+            )
         }
     }
 }
@@ -136,7 +215,7 @@ private fun UpdateCard(versionName: String, onOpenUpdate: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = TgBlue.copy(alpha = 0.12f)),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     ) {
         Row(
             modifier = Modifier
@@ -147,7 +226,7 @@ private fun UpdateCard(versionName: String, onOpenUpdate: () -> Unit) {
             Icon(
                 Icons.Default.SystemUpdate,
                 contentDescription = null,
-                tint = TgBlue,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(28.dp),
             )
             Spacer(modifier = Modifier.width(12.dp))
@@ -171,7 +250,12 @@ private fun UpdateCard(versionName: String, onOpenUpdate: () -> Unit) {
 }
 
 @Composable
-private fun StatusCard(isRunning: Boolean, config: ProxyConfig, uptimeSeconds: Long) {
+private fun StatusCard(
+    isRunning: Boolean,
+    config: ProxyConfig,
+    uptimeSeconds: Long,
+    runtimeRouteMode: RuntimeRouteMode?,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -212,6 +296,21 @@ private fun StatusCard(isRunning: Boolean, config: ProxyConfig, uptimeSeconds: L
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace,
                 )
+                if (isRunning && runtimeRouteMode != null) {
+                    Text(
+                        text = stringResource(
+                            R.string.runtime_route,
+                            when (runtimeRouteMode) {
+                                RuntimeRouteMode.WS_CF_TCP -> "WS → CF → TCP"
+                                RuntimeRouteMode.WS_TCP_CF -> "WS → TCP → CF"
+                                RuntimeRouteMode.CF_WS_TCP -> "CF → WS → TCP"
+                                RuntimeRouteMode.WS_TCP -> "WS → TCP"
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             if (isRunning && uptimeSeconds > 0) {
                 Text(
@@ -281,7 +380,7 @@ private fun ActionButtons(
             Button(
                 onClick = onStart,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                 shape = RoundedCornerShape(12.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             ) {
@@ -314,7 +413,7 @@ private fun LinkActions(
     Button(
         onClick = onOpenInTelegram,
         modifier = Modifier.fillMaxWidth(),
-        colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
         shape = RoundedCornerShape(12.dp),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
     ) {
@@ -346,49 +445,6 @@ private fun formatUptime(seconds: Long): String {
     val m = (seconds % 3600) / 60
     val s = seconds % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
-}
-
-@Composable
-private fun TrafficCard(stats: StatsSnapshot) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Surface(
-                modifier = Modifier.size(44.dp),
-                shape = RoundedCornerShape(12.dp),
-                color = TgBlue.copy(alpha = 0.12f),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Default.SwapVert,
-                        contentDescription = null,
-                        tint = TgBlue,
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = stringResource(R.string.stats_traffic),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = MtProtoConstants.humanBytes(stats.bytesUp + stats.bytesDown),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = TgBlue,
-                )
-            }
-        }
-    }
 }
 
 @Composable
@@ -465,13 +521,13 @@ private fun StatsCard(stats: StatsSnapshot) {
                     label = stringResource(R.string.stats_bad),
                     value = stats.connectionsBad.toString(),
                     modifier = Modifier.weight(1f),
-                    valueColor = if (stats.connectionsBad > 0) StatusOrange else TgBlue,
+                    valueColor = if (stats.connectionsBad > 0) StatusOrange else MaterialTheme.colorScheme.primary,
                 )
                 StatItem(
                     label = stringResource(R.string.stats_ws_errors),
                     value = stats.wsErrors.toString(),
                     modifier = Modifier.weight(1f),
-                    valueColor = if (stats.wsErrors > 0) StatusOrange else TgBlue,
+                    valueColor = if (stats.wsErrors > 0) StatusOrange else MaterialTheme.colorScheme.primary,
                 )
             }
         }
@@ -483,7 +539,7 @@ private fun StatItem(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
-    valueColor: androidx.compose.ui.graphics.Color = TgBlue,
+    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
 ) {
     Column(
         modifier = modifier.padding(4.dp),

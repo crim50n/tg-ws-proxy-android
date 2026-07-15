@@ -6,6 +6,19 @@ import org.junit.Test
 
 class ProxyConfigTest {
     @Test
+    fun usesFlowsealRouteOrderByDefault() {
+        val config = ProxyConfig()
+
+        assertEquals(false, config.cfProxyFirst)
+        assertEquals(true, config.cfProxyPriority)
+        assertEquals(setOf(2, 4), config.dcRedirects.keys)
+        assertEquals("system", config.appTheme)
+        assertEquals(true, config.dynamicColor)
+        assertEquals(true, config.autoOptimizeConnection)
+        assertEquals(RuntimeRouteMode.WS_CF_TCP, config.runtimeRouteMode())
+    }
+
+    @Test
     fun parsesSecretBytes() {
         val config = ProxyConfig(secret = "00112233445566778899aabbccddeeff")
 

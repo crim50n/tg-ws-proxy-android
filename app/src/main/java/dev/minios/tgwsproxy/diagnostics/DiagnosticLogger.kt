@@ -20,6 +20,23 @@ data class DiagnosticState(
     val hasLog: Boolean get() = sizeBytes > 0
 }
 
+data class DiagnosticEntry(
+    val timestamp: String,
+    val event: String,
+    val details: String,
+)
+
+internal fun parseDiagnosticLine(line: String): DiagnosticEntry? {
+    val parts = line.split('\t', limit = 2)
+    if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) return null
+    val safeEvent = DiagnosticRedactor.redact(parts[1])
+    return DiagnosticEntry(
+        timestamp = parts[0],
+        event = safeEvent.substringBefore(' '),
+        details = safeEvent.substringAfter(' ', ""),
+    )
+}
+
 object DiagnosticRedactor {
     private val proxyLink = Regex("(?i)tg://\\S+")
     private val secretParameter = Regex("(?i)(secret=)[^\\s&]+")
@@ -49,17 +66,20 @@ object DiagnosticRedactor {
 object DiagnosticLogger {
     private const val PREFS_NAME = "diagnostic_logging"
     private const val KEY_EXPIRES_AT = "expires_at"
-    private const val RECORDING_DURATION_MS = 30 * 60_000L
+    private const val RECORDING_DURATION_MS = 5 * 60_000L
     private const val RETENTION_MS = 7 * 24 * 60 * 60_000L
     private const val MAX_FILE_BYTES = 1024 * 1024L
     private const val LOG_DIR = "diagnostics"
     private const val CURRENT_LOG = "diagnostic.log"
     private const val PREVIOUS_LOG = "diagnostic.old.log"
+    private const val MAX_LIVE_ENTRIES = 300
 
     private val lock = Any()
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US)
     private val _state = MutableStateFlow(DiagnosticState())
     val state: StateFlow<DiagnosticState> = _state.asStateFlow()
+    private val _entries = MutableStateFlow<List<DiagnosticEntry>>(emptyList())
+    val entries: StateFlow<List<DiagnosticEntry>> = _entries.asStateFlow()
 
     @Volatile
     private var appContext: Context? = null
@@ -69,6 +89,7 @@ object DiagnosticLogger {
         synchronized(lock) {
             deleteExpiredFiles()
             refreshState()
+            loadEntries(context.applicationContext)
         }
     }
 
@@ -117,8 +138,6 @@ object DiagnosticLogger {
     fun event(name: String, vararg fields: Pair<String, Any?>) {
         val context = appContext ?: return
         synchronized(lock) {
-            if (!isRecording(context)) return
-            rotateIfNeeded(context)
             val safeName = name.replace(Regex("[^a-zA-Z0-9_.-]"), "_").take(80)
             val details = fields.joinToString(" ") { (key, value) ->
                 val safeKey = key.replace(Regex("[^a-zA-Z0-9_.-]"), "_").take(40)
@@ -126,8 +145,14 @@ object DiagnosticLogger {
             }
             val timestamp = timestampFormat.format(Date())
             val line = if (details.isEmpty()) "$timestamp\t$safeName\n" else "$timestamp\t$safeName $details\n"
-            currentFile(context).appendText(line, Charsets.UTF_8)
-            refreshState()
+            parseDiagnosticLine(line.trimEnd())?.let { entry ->
+                _entries.value = (_entries.value + entry).takeLast(MAX_LIVE_ENTRIES)
+            }
+            if (isRecording(context)) {
+                rotateIfNeeded(context)
+                currentFile(context).appendText(line, Charsets.UTF_8)
+                refreshState()
+            }
         }
     }
 
@@ -154,7 +179,7 @@ object DiagnosticLogger {
                 writer.appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
                 writer.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
                 writer.appendLine("Exported: ${timestampFormat.format(Date())}")
-                writer.appendLine("Sensitive proxy links and secrets are redacted.")
+                writer.appendLine("Sensitive proxy links, secrets, and IP addresses are redacted.")
                 writer.appendLine()
                 files.forEach { file ->
                     file.forEachLine(Charsets.UTF_8) { writer.appendLine(it) }
@@ -205,6 +230,14 @@ object DiagnosticLogger {
             },
             sizeBytes = currentFile(context).length() + previousFile(context).length(),
         )
+    }
+
+    private fun loadEntries(context: Context) {
+        _entries.value = listOf(previousFile(context), currentFile(context))
+            .filter(File::isFile)
+            .flatMap { it.readLines(Charsets.UTF_8) }
+            .takeLast(MAX_LIVE_ENTRIES)
+            .mapNotNull(::parseDiagnosticLine)
     }
 
     private fun preferences(context: Context) =

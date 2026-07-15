@@ -29,39 +29,54 @@
 
     <!-- Settings screen -->
     <string name="settings_title">Настройки</string>
-    <string name="settings_connection">Подключение MTProto</string>
+    <string name="settings_connection">Локальный прокси</string>
     <string name="settings_host">IP адрес</string>
     <string name="settings_port">Порт</string>
     <string name="settings_secret">Секрет</string>
     <string name="settings_copy_secret">Скопировать секрет</string>
     <string name="settings_regenerate_secret">Сгенерировать новый</string>
-    <string name="settings_dc_section">Датацентры Telegram (DC → IP)</string>
+    <string name="settings_dc_section">Прямые WebSocket-маршруты</string>
     <string name="settings_dc_hint">Формат: DC:IP (по одному на строку)\nНапример: 2:149.154.167.220</string>
-    <string name="settings_cf_section">Cloudflare прокси</string>
-    <string name="settings_cf_enable">Включить CF прокси</string>
-    <string name="settings_cf_priority">Приоритет CF прокси (перед TCP)</string>
-    <string name="settings_cf_custom_domain">Свой домен</string>
+    <string name="settings_dc_description">Расширенная настройка прямых маршрутов для отдельных датацентров Telegram. Удалённый из списка DC использует резервные маршруты.</string>
+    <string name="settings_cf_section">Маршрутизация</string>
+    <string name="settings_auto_optimize">Автоматический выбор режима</string>
+    <string name="settings_auto_optimize_desc">Режим управляет маршрутами, серверами, буфером и пулом. Отключите «Автоматический выбор режима», чтобы открыть все ручные настройки подключения.</string>
+    <string name="settings_cf_enable">Использовать Cloudflare</string>
+    <string name="settings_cf_enable_desc">Дополнительный маршрут для сетей, где прямые подключения ограничены</string>
+    <string name="settings_route_priority">Приоритетный маршрут</string>
+    <string name="settings_route_direct">Сначала прямое подключение</string>
+    <string name="settings_route_direct_desc">WebSocket → Cloudflare → TCP. Рекомендуется для большинства сетей.</string>
+    <string name="settings_route_direct_tcp_desc">WebSocket → TCP → Cloudflare. По возможности используются прямые маршруты.</string>
+    <string name="settings_route_cf">Сначала Cloudflare</string>
+    <string name="settings_route_cf_desc">Cloudflare → WebSocket → TCP. Попробуйте, если не загружаются медиа.</string>
+    <string name="settings_cf_priority">Cloudflare перед резервным TCP</string>
+    <string name="settings_cf_priority_desc">Если выключено, перед Cloudflare проверяется прямой TCP</string>
+    <string name="settings_cf_custom_domain">Использовать свой домен Cloudflare</string>
+    <string name="settings_cf_custom_domain_desc">Полезно, если общие домены перегружены или недоступны</string>
     <string name="settings_cf_domain_label">Домен</string>
-    <string name="settings_cf_test">Тест</string>
+    <string name="settings_cf_test">Проверить домены Cloudflare</string>
     <string name="settings_cf_testing">Тестирование…</string>
     <string name="settings_perf_section">Производительность</string>
+    <string name="settings_perf_description">Настройки по умолчанию подходят большинству устройств. Меняйте их только для диагностики конкретной проблемы.</string>
     <string name="settings_buf_size">Размер буфера (КБ)</string>
     <string name="settings_pool_size">Размер WS пула</string>
-    <string name="settings_save">Сохранить</string>
-    <string name="settings_cancel">Отмена</string>
-    <string name="settings_restart_required">Перезапустите прокси для применения</string>
+    <string name="settings_theme">Тема</string>
+    <string name="settings_theme_mode">Оформление</string>
+    <string name="settings_theme_system">Системное</string>
+    <string name="settings_theme_light">Светлое</string>
+    <string name="settings_theme_dark">Тёмное</string>
+    <string name="settings_dynamic_color">Адаптивные цвета</string>
+    <string name="settings_dynamic_color_desc">Использовать палитру Material You устройства</string>
     <string name="settings_interface">Интерфейс</string>
     <string name="settings_detailed_stats">Подробная статистика</string>
     <string name="settings_detailed_stats_desc">Показывать соединения, маршруты, пул и ошибки на главном экране</string>
-    <string name="settings_diagnostics">Диагностика</string>
-    <string name="diagnostics_description">Временно записывает локальные события сервиса и подключений. Содержимое трафика, ссылки прокси и секреты не сохраняются и никуда не отправляются.</string>
-    <string name="diagnostics_start">Записывать 30 минут</string>
-    <string name="diagnostics_stop">Остановить</string>
-    <string name="diagnostics_recording">Диагностика записывается</string>
+    <string name="diagnostics_start">Записать отчёт за 5 минут</string>
+    <string name="diagnostics_stop">Остановить сохранение</string>
+    <string name="diagnostics_recording">Сохраняется диагностический отчёт</string>
     <string name="diagnostics_time_left">Осталось не более %1$d мин</string>
-    <string name="diagnostics_log_size">Локальный журнал: %1$s</string>
-    <string name="diagnostics_export">Экспортировать</string>
-    <string name="diagnostics_clear">Удалить</string>
+    <string name="diagnostics_reproduce_hint">Откройте Telegram и воспроизведите проблему: откройте чаты, обновите сообщения и загрузите фото или видео. Это добавит полезные события в отчёт.</string>
+    <string name="diagnostics_export">Поделиться журналом</string>
+    <string name="diagnostics_clear">Удалить сохранённый отчёт</string>
     <string name="diagnostics_export_failed">Не удалось экспортировать журнал диагностики</string>
 
     <!-- Validation errors -->
@@ -76,6 +91,8 @@
     <!-- Notification -->
     <string name="notification_channel_name">Прокси сервис</string>
     <string name="notification_channel_desc">Показывает статус прокси</string>
+    <string name="notification_advice_channel_name">Рекомендации подключения</string>
+    <string name="notification_advice_channel_desc">Показывает рекомендации маршрута, когда «Автоматический выбор режима» выключен</string>
     <string name="notification_running">Трафик: %1$s</string>
     <string name="notification_restarting">Перезапуск прокси…</string>
     <string name="notification_restart">Перезапустить</string>
@@ -84,6 +101,7 @@
     <!-- Quick Settings tile -->
     <string name="tile_active">Запущен</string>
     <string name="tile_inactive">Остановлен</string>
+    <string name="runtime_route">Маршрут: %1$s</string>
 
     <!-- CF proxy test -->
     <string name="cf_test_success">DC%1$d: OK (%2$d мс)</string>
@@ -94,6 +112,7 @@
 
     <!-- Common UI -->
     <string name="navigate_back">Назад</string>
+    <string name="more_options">Другие разделы</string>
     <string name="telegram_not_found">Telegram не установлен</string>
     <string name="notification_permission_required">Для фоновой работы требуется разрешение на уведомления</string>
     <string name="update_check_now">Проверить обновления</string>
@@ -105,6 +124,40 @@
     <string name="update_open">Открыть</string>
     <string name="update_open_release">Открыть страницу релиза</string>
     <string name="update_open_failed">Не удалось открыть страницу релиза</string>
+
+    <!-- Event log -->
+    <string name="log_title">Журнал подключений</string>
+    <string name="log_not_recording">События в реальном времени</string>
+    <string name="log_start_hint">События показаны из памяти и не сохраняются в файл</string>
+    <string name="log_empty">Событий подключений пока нет</string>
+    <string name="connection_advice_title">Рекомендация для этой сети</string>
+    <string name="connection_advice_enable_cf">Прямые соединения в этой сети постоянно завершаются по тайм-ауту. Рекомендуется включить Cloudflare.</string>
+    <string name="connection_advice_cf_first">Прямые соединения постоянно завершаются по тайм-ауту, а Cloudflare работает стабильно. Рекомендуется режим «Сначала Cloudflare».</string>
+    <string name="connection_advice_direct_first">Cloudflare постоянно завершается ошибкой, а прямые соединения работают стабильно. Рекомендуется сначала прямое подключение.</string>
+
+    <!-- Help -->
+    <string name="help_title">Справка</string>
+    <string name="help_intro">Здесь описано, как работает прокси, что меняет каждая настройка и как диагностировать проблемы подключения.</string>
+    <string name="help_overview_title">Принцип работы</string>
+    <string name="help_overview_text">Telegram подключается к локальному MTProto-прокси на этом устройстве. Приложение определяет запрошенный датацентр Telegram и передаёт зашифрованное соединение через прямой WebSocket, Cloudflare или прямой TCP. После запуска и смены сети выполняется лёгкая проверка маршрутов. Активный порядок показан на главном экране. Содержимое трафика не расшифровывается интерфейсом и не записывается в журнал подключений.</string>
+    <string name="help_quick_start_title">Первоначальная настройка</string>
+    <string name="help_quick_start_text">1. Запустите прокси на главном экране.\n2. Нажмите «Открыть в Telegram».\n3. Подтвердите прокси в Telegram.\n4. Не отключайте уведомление сервиса.\n\nНастройки сохраняются автоматически. Работающий прокси перезапускается после выхода только при фактическом изменении настроек соединения.</string>
+    <string name="help_mode_title">Режимы подключения</string>
+    <string name="help_mode_text">«Автоматический выбор режима» начинает каждый запуск прокси и каждую новую сеть с порядка WebSocket → Cloudflare → TCP и размером пула 4. При временном переходе на Cloudflare → WebSocket → TCP пул прямых WebSocket отключается. Буфер остаётся на безопасном значении 256 КБ. Ручные настройки подключения скрыты, а активный порядок маршрутов показан на главном экране. Автоматические решения никогда не перезаписывают ручные настройки.\n\nОтключите «Автоматический выбор режима», чтобы открыть все настройки маршрутизации, серверов, домена Cloudflare, DC:IP, буфера и пула. В ручном режиме приложение может показать совет, но никогда не применяет его и не перезапускает из-за него прокси.</string>
+    <string name="help_cf_title">Настройки Cloudflare</string>
+    <string name="help_cf_text">Эти настройки доступны, когда «Автоматический выбор режима» выключен. «Использовать Cloudflare» включает альтернативный маршрут. Переключатель резервного порядка определяет, что проверять раньше после сбоя прямого WebSocket: Cloudflare или прямой TCP.\n\nПроверяйте домены, если подключения через Cloudflare не устанавливаются. HTTP 429 означает, что общий домен достиг лимита подключений; приложение временно пропускает его. Свой домен нужен только при постоянной недоступности общего пула.</string>
+    <string name="help_dc_title">Прямые WebSocket-маршруты</string>
+    <string name="help_dc_text">Эти настройки доступны, когда «Автоматический выбор режима» выключен. Строка DC:IP включает прямой WebSocket для одного датацентра Telegram. Датацентр автоматически выбирает Telegram, приложение выбирает только маршрут. После удаления строки этот датацентр использует Cloudflare или TCP. Не меняйте стандартный список без необходимости точечно проверить маршрутизацию или рекомендации поддержки.</string>
+    <string name="help_advanced_title">Настройки производительности</string>
+    <string name="help_advanced_text">Эти настройки доступны, когда «Автоматический выбор режима» выключен. Пул заранее поддерживает готовые прямые WebSocket-соединения и уменьшает задержку запуска. Буфер определяет объём памяти сокетов при передаче. Стандартный размер пула и буфер 256 КБ подходят большинству устройств. Уменьшайте пул только для экономии памяти и подключений. Не увеличивайте значения без измеримой причины.</string>
+    <string name="help_theme_title">Тема и оформление</string>
+    <string name="help_theme_text">Выберите системное, светлое или тёмное оформление. На Android 12 и новее адаптивные цвета используют палитру Material You, созданную из обоев устройства. Изменения оформления применяются и сохраняются автоматически.</string>
+    <string name="help_log_title">Журнал подключений</string>
+    <string name="help_log_text">Экран всегда показывает последние 300 событий из памяти и не записывает их в файл. Чтобы получить отчёт для отправки, включите пятиминутное сохранение перед воспроизведением проблемы. Содержимое трафика не записывается. При экспорте скрываются ссылки прокси, секреты и IP-адреса. Удаление сохранённого отчёта не очищает события на экране.</string>
+    <string name="help_troubleshooting_title">Устранение проблем</string>
+    <string name="help_troubleshooting_text">Не загружаются медиа при включённом «Автоматическом выборе режима»: проверьте активный маршрут на главном экране и воспроизведите проблему в Telegram, чтобы приложение увидело реальные подключения.\n\nНе загружаются медиа в ручном режиме: выберите «Сначала Cloudflare» и выйдите из настроек, чтобы применить изменение.\n\nНе работает Cloudflare: отключите «Автоматический выбор режима», запустите проверку доменов и найдите HTTP 429 в журнале подключений.\n\nСоединения пропадают при выключенном экране: разрешите фоновую работу и отключите оптимизацию батареи для приложения.\n\nПроблема сохраняется: включите сохранение отчёта, воспроизведите проблему и отправьте полученный файл.</string>
+    <string name="help_background_title">Работа в фоне</string>
+    <string name="help_background_text">Не отключайте уведомление фонового сервиса. Некоторые производители Android ограничивают сеть в фоне; если соединения пропадают при выключенном экране, исключите приложение из оптимизации батареи.</string>
 
     <!-- About screen -->
     <string name="about_title">О приложении</string>

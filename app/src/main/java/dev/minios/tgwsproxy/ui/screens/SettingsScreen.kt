@@ -1,5 +1,7 @@
 package dev.minios.tgwsproxy.ui.screens
 
+import androidx.activity.compose.BackHandler
+import android.os.Build
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,11 +19,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
-import dev.minios.tgwsproxy.diagnostics.DiagnosticState
-import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
-import dev.minios.tgwsproxy.ui.theme.TgBlue
 import dev.minios.tgwsproxy.ui.theme.tgSwitchColors
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -29,28 +28,28 @@ import dev.minios.tgwsproxy.ui.theme.tgSwitchColors
 fun SettingsScreen(
     config: ProxyConfig,
     cfTestResult: String?,
-    diagnosticState: DiagnosticState,
-    onSave: (ProxyConfig) -> Unit,
-    onBack: () -> Unit,
+    onConfigChange: (ProxyConfig) -> Unit,
+    onExit: (ProxyConfig) -> Unit,
     onRegenerateSecret: () -> String,
     onCopySecret: (String) -> Unit,
     onTestCfProxy: () -> Unit,
-    onStartDiagnostics: () -> Unit,
-    onStopDiagnostics: () -> Unit,
-    onExportDiagnostics: () -> Unit,
-    onClearDiagnostics: () -> Unit,
+    onAppearanceChange: (String, Boolean) -> Unit,
 ) {
-    var host by remember(config) { mutableStateOf(config.host) }
-    var port by remember(config) { mutableStateOf(config.port.toString()) }
-    var secret by remember(config) { mutableStateOf(config.secret) }
-    var dcRedirects by remember(config) { mutableStateOf(config.dcRedirectsText()) }
-    var cfEnabled by remember(config) { mutableStateOf(config.cfProxyEnabled) }
-    var cfPriority by remember(config) { mutableStateOf(config.cfProxyPriority) }
-    var cfDomain by remember(config) { mutableStateOf(config.cfProxyUserDomain) }
-    var useCfDomain by remember(config) { mutableStateOf(config.cfProxyUserDomain.isNotBlank()) }
-    var bufKb by remember(config) { mutableStateOf((config.bufferSize / 1024).toString()) }
-    var poolSize by remember(config) { mutableStateOf(config.poolSize.toString()) }
-    var showDetailedStats by remember(config) { mutableStateOf(config.showDetailedStats) }
+    var host by remember { mutableStateOf(config.host) }
+    var port by remember { mutableStateOf(config.port.toString()) }
+    var secret by remember { mutableStateOf(config.secret) }
+    var dcRedirects by remember { mutableStateOf(config.dcRedirectsText()) }
+    var cfEnabled by remember { mutableStateOf(config.cfProxyEnabled) }
+    var cfPriority by remember { mutableStateOf(config.cfProxyPriority) }
+    var cfFirst by remember { mutableStateOf(config.cfProxyFirst) }
+    var autoOptimizeConnection by remember { mutableStateOf(config.autoOptimizeConnection) }
+    var cfDomain by remember { mutableStateOf(config.cfProxyUserDomain) }
+    var useCfDomain by remember { mutableStateOf(config.cfProxyUserDomain.isNotBlank()) }
+    var bufKb by remember { mutableStateOf((config.bufferSize / 1024).toString()) }
+    var poolSize by remember { mutableStateOf(config.poolSize.toString()) }
+    var showDetailedStats by remember { mutableStateOf(config.showDetailedStats) }
+    var appTheme by remember { mutableStateOf(config.appTheme) }
+    var dynamicColor by remember { mutableStateOf(config.dynamicColor) }
 
     // Validation error states.
     var hostError by remember { mutableStateOf<String?>(null) }
@@ -63,13 +62,93 @@ fun SettingsScreen(
 
     val context = LocalContext.current
 
+    fun currentConfig(updateErrors: Boolean): ProxyConfig? {
+        var valid = true
+        val hostVal = host.trim()
+        val portVal = port.toIntOrNull()
+        val secretVal = secret.trim()
+        val parsedRedirects = ProxyConfig.parseDcRedirectsStrict(dcRedirects)
+        val normalizedCfDomain = cfDomain.trim().lowercase()
+        val bufferKb = bufKb.toIntOrNull()
+        val parsedPoolSize = poolSize.toIntOrNull()
+
+        fun error(condition: Boolean, message: Int, update: (String?) -> Unit) {
+            if (condition) valid = false
+            if (updateErrors) update(if (condition) context.getString(message) else null)
+        }
+
+        error(!ProxyConfig.isValidAddress(hostVal), R.string.validation_host_format) { hostError = it }
+        error(portVal == null || portVal !in 1..65535, R.string.validation_port_range) { portError = it }
+        error(!secretVal.matches(Regex("^[0-9a-fA-F]{32}$")), R.string.validation_secret_format) { secretError = it }
+        error(!autoOptimizeConnection && parsedRedirects == null, R.string.validation_dc_format) { dcError = it }
+        error(
+            !autoOptimizeConnection && cfEnabled && useCfDomain && !CfProxyDomains.isValidDomain(normalizedCfDomain),
+            R.string.validation_domain_format,
+        ) { cfDomainError = it }
+        error(
+            !autoOptimizeConnection && (bufferKb == null || bufferKb !in 4..4096),
+            R.string.validation_buffer_range,
+        ) { bufferError = it }
+        error(
+            !autoOptimizeConnection && (parsedPoolSize == null || parsedPoolSize !in 0..16),
+            R.string.validation_pool_range,
+        ) { poolError = it }
+
+        if (!valid) return null
+        return ProxyConfig(
+            host = hostVal,
+            port = portVal!!,
+            secret = secretVal,
+            dcRedirects = parsedRedirects ?: config.dcRedirects,
+            bufferSize = bufferKb?.takeIf { it in 4..4096 }?.times(1024) ?: config.bufferSize,
+            poolSize = parsedPoolSize?.takeIf { it in 0..16 } ?: config.poolSize,
+            cfProxyEnabled = cfEnabled,
+            cfProxyPriority = cfPriority,
+            cfProxyFirst = cfFirst,
+            autoOptimizeConnection = autoOptimizeConnection,
+            cfProxyUserDomain = if (useCfDomain) normalizedCfDomain else "",
+            showDetailedStats = showDetailedStats,
+            appTheme = appTheme,
+            dynamicColor = dynamicColor,
+        )
+    }
+
+    LaunchedEffect(
+        host,
+        port,
+        secret,
+        dcRedirects,
+        cfEnabled,
+        cfPriority,
+        cfFirst,
+        autoOptimizeConnection,
+        cfDomain,
+        useCfDomain,
+        bufKb,
+        poolSize,
+        showDetailedStats,
+        appTheme,
+        dynamicColor,
+    ) {
+        kotlinx.coroutines.delay(350)
+        currentConfig(updateErrors = true)?.let { updated ->
+            if (updated != config) onConfigChange(updated)
+        }
+    }
+
+    val finishSettings = {
+        val updated = currentConfig(updateErrors = true)
+        if (updated != null) onExit(updated)
+    }
+    BackHandler(onBack = finishSettings)
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.settings_title)) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = finishSettings) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = stringResource(R.string.navigate_back),
@@ -77,119 +156,11 @@ fun SettingsScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = TgBlue,
-                    titleContentColor = androidx.compose.ui.graphics.Color.White,
-                    navigationIconContentColor = androidx.compose.ui.graphics.Color.White,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
                 ),
             )
-        },
-        bottomBar = {
-            Surface(
-                modifier = Modifier.imePadding(),
-                shadowElevation = 8.dp,
-                color = MaterialTheme.colorScheme.surface,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = onBack,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(stringResource(R.string.settings_cancel))
-                    }
-                    Button(
-                        onClick = {
-                            // Validate before saving.
-                            var valid = true
-
-                            // Validate host (must be valid IP or hostname)
-                            val hostVal = host.trim()
-                            if (!ProxyConfig.isValidAddress(hostVal)) {
-                                hostError = context.getString(R.string.validation_host_format)
-                                valid = false
-                            } else {
-                                hostError = null
-                            }
-
-                            // Validate port (1-65535)
-                            val portVal = port.toIntOrNull()
-                            if (portVal == null || portVal < 1 || portVal > 65535) {
-                                portError = context.getString(R.string.validation_port_range)
-                                valid = false
-                            } else {
-                                portError = null
-                            }
-
-                            // Validate secret (32 hex chars)
-                            val secretVal = secret.trim()
-                            if (!secretVal.matches(Regex("^[0-9a-fA-F]{32}$"))) {
-                                secretError = context.getString(R.string.validation_secret_format)
-                                valid = false
-                            } else {
-                                secretError = null
-                            }
-
-                            val parsedRedirects = ProxyConfig.parseDcRedirectsStrict(dcRedirects)
-                            if (parsedRedirects == null) {
-                                dcError = context.getString(R.string.validation_dc_format)
-                                valid = false
-                            } else {
-                                dcError = null
-                            }
-
-                            val normalizedCfDomain = cfDomain.trim().lowercase()
-                            if (cfEnabled && useCfDomain && !CfProxyDomains.isValidDomain(normalizedCfDomain)) {
-                                cfDomainError = context.getString(R.string.validation_domain_format)
-                                valid = false
-                            } else {
-                                cfDomainError = null
-                            }
-
-                            val bufferKb = bufKb.toIntOrNull()
-                            if (bufferKb == null || bufferKb !in 4..4096) {
-                                bufferError = context.getString(R.string.validation_buffer_range)
-                                valid = false
-                            } else {
-                                bufferError = null
-                            }
-
-                            val parsedPoolSize = poolSize.toIntOrNull()
-                            if (parsedPoolSize == null || parsedPoolSize !in 0..16) {
-                                poolError = context.getString(R.string.validation_pool_range)
-                                valid = false
-                            } else {
-                                poolError = null
-                            }
-
-                            if (!valid) return@Button
-
-                            val newConfig = ProxyConfig(
-                                host = hostVal,
-                                port = portVal!!,
-                                secret = secretVal,
-                                dcRedirects = parsedRedirects!!,
-                                bufferSize = bufferKb!! * 1024,
-                                poolSize = parsedPoolSize!!,
-                                cfProxyEnabled = cfEnabled,
-                                cfProxyPriority = cfPriority,
-                                cfProxyUserDomain = if (useCfDomain) normalizedCfDomain else "",
-                                showDetailedStats = showDetailedStats,
-                            )
-                            onSave(newConfig)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Text(stringResource(R.string.settings_save))
-                    }
-                }
-            }
         },
     ) { paddingValues ->
         Column(
@@ -260,26 +231,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // DC Redirects section
-            SectionHeader(text = stringResource(R.string.settings_dc_section))
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = dcRedirects,
-                onValueChange = { dcRedirects = it; dcError = null },
-                label = { Text(stringResource(R.string.dc_ip_label)) },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 3,
-                maxLines = 6,
-                shape = RoundedCornerShape(12.dp),
-                placeholder = { Text(stringResource(R.string.settings_dc_hint)) },
-                isError = dcError != null,
-                supportingText = dcError?.let { { Text(it) } },
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Cloudflare Proxy section
+            // Routing section
             SectionHeader(text = stringResource(R.string.settings_cf_section))
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -288,7 +240,39 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Text(stringResource(R.string.settings_cf_enable))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.settings_auto_optimize))
+                    Text(
+                        text = stringResource(R.string.settings_auto_optimize_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Switch(
+                    checked = autoOptimizeConnection,
+                    onCheckedChange = { autoOptimizeConnection = it },
+                    colors = tgSwitchColors(),
+                )
+            }
+
+            if (!autoOptimizeConnection) {
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.settings_cf_enable))
+                    Text(
+                        text = stringResource(R.string.settings_cf_enable_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
                 Switch(
                     checked = cfEnabled,
                     onCheckedChange = { cfEnabled = it },
@@ -296,18 +280,52 @@ fun SettingsScreen(
                 )
             }
 
-            if (cfEnabled) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(stringResource(R.string.settings_cf_priority))
-                    Switch(
-                        checked = cfPriority,
-                        onCheckedChange = { cfPriority = it },
-                        colors = tgSwitchColors(),
-                    )
+                if (cfEnabled) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = stringResource(R.string.settings_route_priority),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                RouteOption(
+                    selected = !cfFirst,
+                    title = stringResource(R.string.settings_route_direct),
+                    description = stringResource(
+                        if (cfPriority) R.string.settings_route_direct_desc else R.string.settings_route_direct_tcp_desc,
+                    ),
+                    onClick = { cfFirst = false },
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                RouteOption(
+                    selected = cfFirst,
+                    title = stringResource(R.string.settings_route_cf),
+                    description = stringResource(R.string.settings_route_cf_desc),
+                    onClick = { cfFirst = true },
+                )
+
+                if (!cfFirst) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(stringResource(R.string.settings_cf_priority))
+                            Text(
+                                text = stringResource(R.string.settings_cf_priority_desc),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Switch(
+                            checked = cfPriority,
+                            onCheckedChange = { cfPriority = it },
+                            colors = tgSwitchColors(),
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -317,7 +335,15 @@ fun SettingsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
-                    Text(stringResource(R.string.settings_cf_custom_domain))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.settings_cf_custom_domain))
+                        Text(
+                            text = stringResource(R.string.settings_cf_custom_domain_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
                     Switch(
                         checked = useCfDomain,
                         onCheckedChange = { useCfDomain = it },
@@ -346,8 +372,9 @@ fun SettingsScreen(
                 ) {
                     Button(
                         onClick = onTestCfProxy,
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
                     ) {
                         Icon(Icons.Default.NetworkCheck, contentDescription = null)
                         Spacer(modifier = Modifier.width(8.dp))
@@ -370,36 +397,126 @@ fun SettingsScreen(
                 }
             }
 
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Direct WebSocket targets
+                SectionHeader(text = stringResource(R.string.settings_dc_section))
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_dc_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = dcRedirects,
+                    onValueChange = { dcRedirects = it; dcError = null },
+                    label = { Text(stringResource(R.string.dc_ip_label)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3,
+                    maxLines = 6,
+                    shape = RoundedCornerShape(12.dp),
+                    placeholder = { Text(stringResource(R.string.settings_dc_hint)) },
+                    isError = dcError != null,
+                    supportingText = dcError?.let { { Text(it) } },
+                )
+            }
+
+            if (!autoOptimizeConnection) {
+                Spacer(modifier = Modifier.height(24.dp))
+
+                // Performance section
+                SectionHeader(text = stringResource(R.string.settings_perf_section))
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.settings_perf_description),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = bufKb,
+                    onValueChange = { bufKb = it; bufferError = null },
+                    label = { Text(stringResource(R.string.settings_buf_size)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    shape = RoundedCornerShape(12.dp),
+                    isError = bufferError != null,
+                    supportingText = bufferError?.let { { Text(it) } },
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                OutlinedTextField(
+                    value = poolSize,
+                    onValueChange = { poolSize = it; poolError = null },
+                    label = { Text(stringResource(R.string.settings_pool_size)) },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    shape = RoundedCornerShape(12.dp),
+                    isError = poolError != null,
+                    supportingText = poolError?.let { { Text(it) } },
+                )
+            }
+
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Performance section
-            SectionHeader(text = stringResource(R.string.settings_perf_section))
+            SectionHeader(text = stringResource(R.string.settings_theme))
             Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = bufKb,
-                onValueChange = { bufKb = it; bufferError = null },
-                label = { Text(stringResource(R.string.settings_buf_size)) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                shape = RoundedCornerShape(12.dp),
-                isError = bufferError != null,
-                supportingText = bufferError?.let { { Text(it) } },
+            Text(
+                text = stringResource(R.string.settings_theme_mode),
+                style = MaterialTheme.typography.bodyMedium,
             )
             Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = poolSize,
-                onValueChange = { poolSize = it; poolError = null },
-                label = { Text(stringResource(R.string.settings_pool_size)) },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                shape = RoundedCornerShape(12.dp),
-                isError = poolError != null,
-                supportingText = poolError?.let { { Text(it) } },
+            val themeOptions = listOf(
+                "system" to stringResource(R.string.settings_theme_system),
+                "light" to stringResource(R.string.settings_theme_light),
+                "dark" to stringResource(R.string.settings_theme_dark),
             )
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                themeOptions.forEachIndexed { index, (value, label) ->
+                    SegmentedButton(
+                        selected = appTheme == value,
+                        onClick = {
+                            appTheme = value
+                            onAppearanceChange(value, dynamicColor)
+                        },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = themeOptions.size),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(label)
+                    }
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.settings_dynamic_color))
+                        Text(
+                            text = stringResource(R.string.settings_dynamic_color_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Switch(
+                        checked = dynamicColor,
+                        onCheckedChange = {
+                            dynamicColor = it
+                            onAppearanceChange(appTheme, it)
+                        },
+                        colors = tgSwitchColors(),
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -426,91 +543,6 @@ fun SettingsScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
-
-            SectionHeader(text = stringResource(R.string.settings_diagnostics))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = stringResource(R.string.diagnostics_description),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (diagnosticState.isRecording) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.diagnostics_recording),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = TgBlue,
-                        )
-                        Text(
-                            text = stringResource(
-                                R.string.diagnostics_time_left,
-                                diagnosticState.remainingMinutes,
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    OutlinedButton(
-                        onClick = onStopDiagnostics,
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                    ) {
-                        Text(stringResource(R.string.diagnostics_stop))
-                    }
-                }
-            } else {
-                Button(
-                    onClick = onStartDiagnostics,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = TgBlue),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Default.BugReport, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(stringResource(R.string.diagnostics_start))
-                }
-            }
-
-            if (diagnosticState.hasLog) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = stringResource(
-                        R.string.diagnostics_log_size,
-                        MtProtoConstants.humanBytes(diagnosticState.sizeBytes),
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    OutlinedButton(
-                        onClick = onExportDiagnostics,
-                        modifier = Modifier.weight(1f),
-                        shape = RoundedCornerShape(12.dp),
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-                    ) {
-                        Text(stringResource(R.string.diagnostics_export))
-                    }
-                    TextButton(
-                        onClick = onClearDiagnostics,
-                        modifier = Modifier.weight(1f),
-                    ) {
-                        Text(stringResource(R.string.diagnostics_clear))
-                    }
-                }
-            }
-
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
@@ -521,8 +553,44 @@ private fun SectionHeader(text: String) {
     Text(
         text = text,
         style = MaterialTheme.typography.titleSmall,
-        color = TgBlue,
+        color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(vertical = 4.dp),
     )
     HorizontalDivider()
+}
+
+@Composable
+private fun RouteOption(
+    selected: Boolean,
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        border = if (selected) {
+            androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
+        } else {
+            null
+        },
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = selected, onClick = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = title, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
