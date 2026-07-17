@@ -3,6 +3,7 @@ package dev.minios.tgwsproxy.proxy
 import android.util.Log
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import kotlinx.coroutines.*
+import java.net.BindException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -11,6 +12,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.Locale
 
 private const val TAG = "TgWsProxyServer"
 
@@ -39,6 +41,7 @@ class TgWsProxyServer(
     // Track active handlers and sockets for deterministic shutdown.
     private val clientJobs = ConcurrentHashMap.newKeySet<Job>()
     private val clientSockets = ConcurrentHashMap.newKeySet<Socket>()
+    private val activeUpstreams = ConcurrentHashMap.newKeySet<Bridge.UpstreamConnection>()
 
     val isRunning: Boolean get() = listening.get()
 
@@ -79,6 +82,25 @@ class TgWsProxyServer(
         val startupStartedAt = System.currentTimeMillis()
 
         try {
+            // Bind before starting upstream work so a busy local port fails immediately.
+            val ss = ServerSocket()
+            ss.reuseAddress = true
+            ss.soTimeout = 0
+            try {
+                ss.bind(InetSocketAddress(config.host, config.port))
+            } catch (e: BindException) {
+                try { ss.close() } catch (_: Exception) {}
+                if (isAddressAlreadyInUse(e.message)) {
+                    throw ProxyPortInUseException(config.port, e)
+                }
+                throw e
+            }
+            serverSocket = ss
+            if (stopRequested.get() || !running.get()) {
+                ss.close()
+                return@withContext
+            }
+
             // Initialize WS pool
             wsPool = WsPool(
                 poolSize = config.poolSize,
@@ -103,16 +125,6 @@ class TgWsProxyServer(
                 }
             }
 
-            // Create server socket
-            val ss = ServerSocket()
-            ss.reuseAddress = true
-            ss.soTimeout = 0
-            ss.bind(InetSocketAddress(config.host, config.port))
-            serverSocket = ss
-            if (stopRequested.get() || !running.get()) {
-                ss.close()
-                return@withContext
-            }
             listening.set(true)
             DiagnosticLogger.event(
                 "listener_ready",
@@ -209,6 +221,10 @@ class TgWsProxyServer(
         serverSocket = null
 
         // Closing sockets interrupts blocking Java reads before coroutine cancellation.
+        activeUpstreams.forEach { upstream ->
+            try { upstream.close() } catch (_: Exception) {}
+        }
+        scope?.cancel()
         if (clientJobs.isNotEmpty()) {
             Log.i(TAG, "Closing ${clientJobs.size} active connection(s)...")
             clientSockets.forEach { socket ->
@@ -225,6 +241,7 @@ class TgWsProxyServer(
         scope = null
         clientJobs.clear()
         clientSockets.clear()
+        activeUpstreams.clear()
 
         if (wasListening) onStatusChange?.invoke(false)
     }
@@ -344,6 +361,7 @@ class TgWsProxyServer(
                 protoTag = handshake.protoTag,
                 relayInit = relayInit.initPacket,
             )
+            activeUpstreams.add(upstream)
             DiagnosticLogger.event(
                 "upstream_connected",
                 "dc" to absDc,
@@ -364,8 +382,14 @@ class TgWsProxyServer(
                     relayInit = relayInit.initPacket,
                     bufferSize = config.bufferSize,
                     protoTag = handshake.protoTag,
+                    dc = absDc,
+                    isMedia = isMedia,
+                    adaptiveRoutingEnabled = config.autoOptimizeConnection && config.cfProxyEnabled,
+                    webSocketPingIntervalSeconds = config.webSocketPingIntervalSeconds,
+                    closeClient = { try { clientSocket.close() } catch (_: Exception) {} },
                 )
             } finally {
+                activeUpstreams.remove(upstream)
                 upstream.close()
             }
 
@@ -399,3 +423,13 @@ class TgWsProxyServer(
         var globalVerbose: Boolean = false
     }
 }
+
+internal fun isAddressAlreadyInUse(message: String?): Boolean {
+    val normalized = message.orEmpty().lowercase(Locale.ROOT)
+    return "eaddrinuse" in normalized || "address already in use" in normalized
+}
+
+class ProxyPortInUseException(
+    val port: Int,
+    cause: Throwable,
+) : Exception("Local port $port is already in use", cause)

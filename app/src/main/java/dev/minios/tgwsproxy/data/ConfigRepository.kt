@@ -28,6 +28,12 @@ class ConfigRepository(private val context: Context) {
         val CF_PROXY_PRIORITY = booleanPreferencesKey("cf_proxy_priority")
         val CF_PROXY_FIRST = booleanPreferencesKey("cf_proxy_first")
         val AUTO_OPTIMIZE_CONNECTION = booleanPreferencesKey("auto_optimize_connection")
+        val KEEP_CPU_AWAKE = booleanPreferencesKey("keep_cpu_awake")
+        val PRECONNECT_WEBSOCKETS = booleanPreferencesKey("preconnect_websockets")
+        val ROUTE_PROBES_ENABLED = booleanPreferencesKey("route_probes_enabled")
+        val CF_DOMAIN_REFRESH_ENABLED = booleanPreferencesKey("cf_domain_refresh_enabled")
+        val WS_PING_INTERVAL_SECONDS = intPreferencesKey("ws_ping_interval_seconds")
+        val SHOW_TRAFFIC_IN_NOTIFICATION = booleanPreferencesKey("show_traffic_in_notification")
         val CF_PROXY_USER_DOMAIN = stringPreferencesKey("cf_proxy_user_domain")
         val SHOW_DETAILED_STATS = booleanPreferencesKey("show_detailed_stats")
         val APP_THEME = stringPreferencesKey("app_theme")
@@ -76,6 +82,12 @@ class ConfigRepository(private val context: Context) {
             cfProxyPriority = prefs[Keys.CF_PROXY_PRIORITY] ?: true,
             cfProxyFirst = prefs[Keys.CF_PROXY_FIRST] ?: false,
             autoOptimizeConnection = prefs[Keys.AUTO_OPTIMIZE_CONNECTION] ?: true,
+            keepCpuAwake = prefs[Keys.KEEP_CPU_AWAKE] ?: true,
+            preconnectWebSockets = prefs[Keys.PRECONNECT_WEBSOCKETS] ?: true,
+            routeProbesEnabled = prefs[Keys.ROUTE_PROBES_ENABLED] ?: true,
+            cfDomainRefreshEnabled = prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] ?: true,
+            webSocketPingIntervalSeconds = (prefs[Keys.WS_PING_INTERVAL_SECONDS] ?: 30).coerceIn(30, 300),
+            showTrafficInNotification = prefs[Keys.SHOW_TRAFFIC_IN_NOTIFICATION] ?: true,
             cfProxyUserDomain = prefs[Keys.CF_PROXY_USER_DOMAIN]
                 ?.trim()
                 ?.lowercase()
@@ -107,6 +119,12 @@ class ConfigRepository(private val context: Context) {
             prefs[Keys.CF_PROXY_PRIORITY] = config.cfProxyPriority
             prefs[Keys.CF_PROXY_FIRST] = config.cfProxyFirst
             prefs[Keys.AUTO_OPTIMIZE_CONNECTION] = config.autoOptimizeConnection
+            prefs[Keys.KEEP_CPU_AWAKE] = config.keepCpuAwake
+            prefs[Keys.PRECONNECT_WEBSOCKETS] = config.preconnectWebSockets
+            prefs[Keys.ROUTE_PROBES_ENABLED] = config.routeProbesEnabled
+            prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] = config.cfDomainRefreshEnabled
+            prefs[Keys.WS_PING_INTERVAL_SECONDS] = config.webSocketPingIntervalSeconds.coerceIn(30, 300)
+            prefs[Keys.SHOW_TRAFFIC_IN_NOTIFICATION] = config.showTrafficInNotification
             prefs[Keys.CF_PROXY_USER_DOMAIN] = config.cfProxyUserDomain
             prefs[Keys.SHOW_DETAILED_STATS] = config.showDetailedStats
             prefs[Keys.APP_THEME] = config.appTheme

@@ -10,6 +10,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "Bridge"
@@ -78,7 +79,6 @@ object Bridge {
     private const val WS_NORMAL_TIMEOUT_MS = 10_000
     private const val TCP_CONNECT_TIMEOUT_MS = 10_000
     private const val DIRECT_IP_FAIL_COOLDOWN_MS = 60 * 60_000L
-    private const val WS_PING_INTERVAL_MS = 30_000L
     private const val CF_FALLBACK_PARALLELISM = 2
 
     enum class UpstreamType { WEBSOCKET, CFPROXY, TCP }
@@ -90,6 +90,7 @@ object Bridge {
     private val dcFailUntil = ConcurrentHashMap<String, Long>()
     private val directIpFailUntil = ConcurrentHashMap<String, Long>()
     private val cfCooldowns = CfCooldownTracker()
+    private val directWsCircuitBreaker = DirectWsCircuitBreaker()
 
     /**
      * Reset blacklist and cooldown state (called on server restart).
@@ -99,6 +100,8 @@ object Bridge {
         dcFailUntil.clear()
         directIpFailUntil.clear()
         cfCooldowns.reset()
+        CfDnsResolver.reset()
+        directWsCircuitBreaker.reset()
     }
 
     /**
@@ -140,9 +143,20 @@ object Bridge {
         val attemptStartedAt = System.currentTimeMillis()
         val mediaTag = if (isMedia) " media" else ""
         val dcKey = "$dc${if (isMedia) "m" else ""}"
-        val cfAttempted = config.cfProxyEnabled && config.cfProxyFirst
+        val adaptiveCfFirst = config.autoOptimizeConnection &&
+                config.cfProxyEnabled &&
+                directWsCircuitBreaker.isBlocked(dc, isMedia)
+        val cfAttempted = config.cfProxyEnabled && (config.cfProxyFirst || adaptiveCfFirst)
 
         if (cfAttempted) {
+            if (adaptiveCfFirst) {
+                DiagnosticLogger.event(
+                    "adaptive_route_override",
+                    "dc" to dc,
+                    "media" to isMedia,
+                    "route" to "cloudflare",
+                )
+            }
             DiagnosticLogger.event("upstream_attempt", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
             val conn = tryCfProxyFallback(dc, isMedia, config)
             if (conn != null) return@withContext conn
@@ -383,6 +397,7 @@ object Bridge {
         bufferSize: Int,
         baseDomain: String,
     ): Pair<String, RawWebSocket>? {
+        if (CfDnsResolver.shouldSkipConnectionAttempt()) return null
         val mediaTag = if (isMedia) " media" else ""
         return try {
             val ws = RawWebSocket.connectToDc(
@@ -393,6 +408,7 @@ object Bridge {
                 cfProxyDomain = baseDomain,
                 connectTimeoutMs = WS_NORMAL_TIMEOUT_MS,
             )
+            CfDnsResolver.markAvailable()
             cfCooldowns.clear(baseDomain)
             baseDomain to ws
         } catch (e: Exception) {
@@ -460,14 +476,47 @@ object Bridge {
         relayInit: ByteArray,
         bufferSize: Int,
         protoTag: Int,
+        dc: Int,
+        isMedia: Boolean,
+        adaptiveRoutingEnabled: Boolean,
+        webSocketPingIntervalSeconds: Int,
+        closeClient: () -> Unit,
     ) = coroutineScope {
         // Per-session traffic statistics.
         val startTime = System.currentTimeMillis()
+        val mediaTag = if (isMedia) " media" else ""
         var upBytes = 0L
         var downBytes = 0L
         var upPackets = 0L
         var downPackets = 0L
         val lastActivityAt = AtomicLong(System.currentTimeMillis())
+        val pendingLock = Any()
+        var pendingSince = 0L
+        var pendingBytes = 0L
+        var pendingDownBytes = 0L
+        val stalled = AtomicBoolean(false)
+
+        fun markDirectRequest(bytes: Int) {
+            synchronized(pendingLock) {
+                if (pendingSince == 0L) pendingSince = System.currentTimeMillis()
+                pendingBytes += bytes
+            }
+        }
+
+        fun markDirectResponse(bytes: Int) {
+            val meaningful = synchronized(pendingLock) {
+                if (pendingSince > 0L) pendingDownBytes += bytes
+                if (pendingDownBytes >= DirectWsCircuitBreaker.MIN_MEANINGFUL_DOWN_BYTES) {
+                    pendingSince = 0L
+                    pendingBytes = 0L
+                    pendingDownBytes = 0L
+                    true
+                } else {
+                    false
+                }
+            }
+            if (meaningful) directWsCircuitBreaker.recordResponsive(dc, isMedia)
+        }
 
         // Send relay init to upstream
         when (upstream.type) {
@@ -498,10 +547,11 @@ object Bridge {
         } else null
 
         val pingJob = upstream.ws?.let { ws ->
+            val pingIntervalMs = webSocketPingIntervalSeconds.coerceIn(30, 300) * 1_000L
             launch(Dispatchers.IO) {
                 while (isActive) {
-                    delay(WS_PING_INTERVAL_MS)
-                    if (System.currentTimeMillis() - lastActivityAt.get() < WS_PING_INTERVAL_MS) continue
+                    delay(pingIntervalMs)
+                    if (System.currentTimeMillis() - lastActivityAt.get() < pingIntervalMs) continue
                     try {
                         ws.sendPing()
                     } catch (_: Exception) {
@@ -511,6 +561,46 @@ object Bridge {
                 }
             }
         }
+
+        val stallWatchdogJob = if (
+            adaptiveRoutingEnabled && isMedia && upstream.type == UpstreamType.WEBSOCKET
+        ) {
+            launch(Dispatchers.IO) {
+                while (isActive) {
+                    delay(1_000)
+                    val now = System.currentTimeMillis()
+                    val stalledTraffic = synchronized(pendingLock) {
+                        if (DirectWsCircuitBreaker.isStalled(
+                                pendingSince = pendingSince,
+                                pendingBytesUp = pendingBytes,
+                                pendingBytesDown = pendingDownBytes,
+                                now = now,
+                            )
+                        ) {
+                            pendingBytes to pendingDownBytes
+                        } else {
+                            null
+                        }
+                    }
+                    if (stalledTraffic == null || !stalled.compareAndSet(false, true)) continue
+
+                    val result = directWsCircuitBreaker.recordStall(dc, isMedia)
+                    DiagnosticLogger.event(
+                        "direct_ws_stalled",
+                        "dc" to dc,
+                        "media" to isMedia,
+                        "pendingBytesUp" to stalledTraffic.first,
+                        "pendingBytesDown" to stalledTraffic.second,
+                        "strikes" to result.strikes,
+                        "overrideActivated" to result.activated,
+                        "blockedForMs" to result.blockedForMs,
+                    )
+                    Log.w(TAG, "DC$dc$mediaTag direct WS stalled; closing session (strike ${result.strikes})")
+                    upstream.ws?.close()
+                    break
+                }
+            }
+        } else null
 
         val clientToUpstream = launch(Dispatchers.IO) {
             try {
@@ -543,12 +633,14 @@ object Bridge {
                             if (splitter != null) {
                                 val parts = splitter.split(reencrypted)
                                 if (parts.isEmpty()) continue
+                                if (upstream.type == UpstreamType.WEBSOCKET) markDirectRequest(read)
                                 if (parts.size > 1) {
                                     upstream.ws!!.sendBatch(parts)
                                 } else {
                                     upstream.ws!!.sendBinary(parts[0])
                                 }
                             } else {
+                                if (upstream.type == UpstreamType.WEBSOCKET) markDirectRequest(read)
                                 upstream.ws!!.sendBinary(reencrypted)
                             }
                         }
@@ -573,6 +665,7 @@ object Bridge {
                             lastActivityAt.set(System.currentTimeMillis())
                             downBytes += data.size
                             downPackets++
+                            if (upstream.type == UpstreamType.WEBSOCKET) markDirectResponse(data.size)
 
                             // Decrypt from telegram, re-encrypt for client
                             val decrypted = cryptoCtx.telegramDecryptor.update(data)
@@ -611,9 +704,13 @@ object Bridge {
         try {
             awaitFirstCompletion(clientToUpstream, upstreamToClient)
         } finally {
+            // Coroutine cancellation does not interrupt blocking socket reads. Close the
+            // transport first so both bridge directions can actually finish.
+            closeBridgeEndpoints(closeClient, upstream::close)
             clientToUpstream.cancel()
             upstreamToClient.cancel()
             pingJob?.cancel()
+            stallWatchdogJob?.cancel()
 
             // Log a compact per-session summary.
             val elapsed = (System.currentTimeMillis() - startTime) / 1000.0
@@ -624,12 +721,15 @@ object Bridge {
             ))
             DiagnosticLogger.event(
                 "session_completed",
+                "dc" to dc,
+                "media" to isMedia,
                 "route" to upstream.type,
                 "durationMs" to System.currentTimeMillis() - startTime,
                 "bytesUp" to upBytes,
                 "bytesDown" to downBytes,
                 "packetsUp" to upPackets,
                 "packetsDown" to downPackets,
+                "stalled" to stalled.get(),
             )
         }
     }
@@ -651,6 +751,11 @@ object Bridge {
         } catch (_: Exception) {
         }
     }
+}
+
+internal fun closeBridgeEndpoints(closeClient: () -> Unit, closeUpstream: () -> Unit) {
+    try { closeClient() } catch (_: Exception) {}
+    try { closeUpstream() } catch (_: Exception) {}
 }
 
 class ProxyException(message: String, cause: Throwable? = null) : Exception(message, cause)

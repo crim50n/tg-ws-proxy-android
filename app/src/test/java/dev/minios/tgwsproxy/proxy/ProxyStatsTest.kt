@@ -1,6 +1,9 @@
 package dev.minios.tgwsproxy.proxy
 
+import dev.minios.tgwsproxy.ui.screens.shouldWarnRejectedConnections
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProxyStatsTest {
@@ -22,5 +25,13 @@ class ProxyStatsTest {
         ProxyStats.resetAll()
 
         assertEquals(StatsSnapshot(), ProxyStats.snapshot())
+    }
+
+    @Test
+    fun warnsOnlyForSustainedHighRejectedConnectionRate() {
+        assertFalse(shouldWarnRejectedConnections(total = 19, rejected = 15))
+        assertFalse(shouldWarnRejectedConnections(total = 100, rejected = 19))
+        assertTrue(shouldWarnRejectedConnections(total = 100, rejected = 20))
+        assertTrue(shouldWarnRejectedConnections(total = 816, rejected = 651))
     }
 }

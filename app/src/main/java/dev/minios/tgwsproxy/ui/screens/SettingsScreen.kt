@@ -9,9 +9,11 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -34,6 +36,7 @@ fun SettingsScreen(
     onCopySecret: (String) -> Unit,
     onTestCfProxy: () -> Unit,
     onAppearanceChange: (String, Boolean) -> Unit,
+    onOpenLogs: () -> Unit,
 ) {
     var host by remember { mutableStateOf(config.host) }
     var port by remember { mutableStateOf(config.port.toString()) }
@@ -43,6 +46,12 @@ fun SettingsScreen(
     var cfPriority by remember { mutableStateOf(config.cfProxyPriority) }
     var cfFirst by remember { mutableStateOf(config.cfProxyFirst) }
     var autoOptimizeConnection by remember { mutableStateOf(config.autoOptimizeConnection) }
+    var keepCpuAwake by remember { mutableStateOf(config.keepCpuAwake) }
+    var preconnectWebSockets by remember { mutableStateOf(config.preconnectWebSockets) }
+    var routeProbesEnabled by remember { mutableStateOf(config.routeProbesEnabled) }
+    var cfDomainRefreshEnabled by remember { mutableStateOf(config.cfDomainRefreshEnabled) }
+    var webSocketPingIntervalSeconds by remember { mutableIntStateOf(config.webSocketPingIntervalSeconds) }
+    var showTrafficInNotification by remember { mutableStateOf(config.showTrafficInNotification) }
     var cfDomain by remember { mutableStateOf(config.cfProxyUserDomain) }
     var useCfDomain by remember { mutableStateOf(config.cfProxyUserDomain.isNotBlank()) }
     var bufKb by remember { mutableStateOf((config.bufferSize / 1024).toString()) }
@@ -50,6 +59,7 @@ fun SettingsScreen(
     var showDetailedStats by remember { mutableStateOf(config.showDetailedStats) }
     var appTheme by remember { mutableStateOf(config.appTheme) }
     var dynamicColor by remember { mutableStateOf(config.dynamicColor) }
+    var regenerateSecretDialogVisible by rememberSaveable { mutableStateOf(false) }
 
     // Validation error states.
     var hostError by remember { mutableStateOf<String?>(null) }
@@ -106,6 +116,12 @@ fun SettingsScreen(
             cfProxyPriority = cfPriority,
             cfProxyFirst = cfFirst,
             autoOptimizeConnection = autoOptimizeConnection,
+            keepCpuAwake = keepCpuAwake,
+            preconnectWebSockets = preconnectWebSockets,
+            routeProbesEnabled = routeProbesEnabled,
+            cfDomainRefreshEnabled = cfDomainRefreshEnabled,
+            webSocketPingIntervalSeconds = webSocketPingIntervalSeconds,
+            showTrafficInNotification = showTrafficInNotification,
             cfProxyUserDomain = if (useCfDomain) normalizedCfDomain else "",
             showDetailedStats = showDetailedStats,
             appTheme = appTheme,
@@ -122,6 +138,12 @@ fun SettingsScreen(
         cfPriority,
         cfFirst,
         autoOptimizeConnection,
+        keepCpuAwake,
+        preconnectWebSockets,
+        routeProbesEnabled,
+        cfDomainRefreshEnabled,
+        webSocketPingIntervalSeconds,
+        showTrafficInNotification,
         cfDomain,
         useCfDomain,
         bufKb,
@@ -141,6 +163,30 @@ fun SettingsScreen(
         if (updated != null) onExit(updated)
     }
     BackHandler(onBack = finishSettings)
+
+    if (regenerateSecretDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { regenerateSecretDialogVisible = false },
+            title = { Text(stringResource(R.string.settings_regenerate_secret_title)) },
+            text = { Text(stringResource(R.string.settings_regenerate_secret_warning)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        secret = onRegenerateSecret()
+                        secretError = null
+                        regenerateSecretDialogVisible = false
+                    },
+                ) {
+                    Text(stringResource(R.string.settings_regenerate_secret_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { regenerateSecretDialogVisible = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -170,7 +216,6 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
         ) {
-            // MTProto Connection section
             SectionHeader(text = stringResource(R.string.settings_connection))
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -182,7 +227,9 @@ fun SettingsScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
                 isError = hostError != null,
-                supportingText = hostError?.let { { Text(it) } },
+                supportingText = {
+                    Text(hostError ?: stringResource(R.string.settings_host_desc))
+                },
             )
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -207,7 +254,9 @@ fun SettingsScreen(
                 singleLine = true,
                 shape = RoundedCornerShape(12.dp),
                 isError = secretError != null,
-                supportingText = secretError?.let { { Text(it) } },
+                supportingText = {
+                    Text(secretError ?: stringResource(R.string.settings_secret_desc))
+                },
                 trailingIcon = {
                     Row {
                         IconButton(
@@ -219,7 +268,7 @@ fun SettingsScreen(
                                 contentDescription = stringResource(R.string.settings_copy_secret),
                             )
                         }
-                        IconButton(onClick = { secret = onRegenerateSecret(); secretError = null }) {
+                        IconButton(onClick = { regenerateSecretDialogVisible = true }) {
                             Icon(
                                 Icons.Default.Refresh,
                                 contentDescription = stringResource(R.string.settings_regenerate_secret),
@@ -231,34 +280,24 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Routing section
-            SectionHeader(text = stringResource(R.string.settings_cf_section))
+            SectionHeader(text = stringResource(R.string.settings_connection_options))
             Spacer(modifier = Modifier.height(8.dp))
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.settings_auto_optimize))
-                    Text(
-                        text = stringResource(R.string.settings_auto_optimize_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Switch(
-                    checked = autoOptimizeConnection,
-                    onCheckedChange = { autoOptimizeConnection = it },
-                    colors = tgSwitchColors(),
-                )
-            }
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_auto_optimize),
+                description = stringResource(R.string.settings_auto_optimize_desc),
+                checked = autoOptimizeConnection,
+                onCheckedChange = { autoOptimizeConnection = it },
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.settings_apply_notice),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+            )
 
             if (!autoOptimizeConnection) {
-                Spacer(modifier = Modifier.height(16.dp))
-
+                Spacer(modifier = Modifier.height(24.dp))
                 Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -367,6 +406,13 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                Text(
+                    text = stringResource(R.string.settings_cf_test_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -400,7 +446,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(24.dp))
 
                 // Direct WebSocket targets
-                SectionHeader(text = stringResource(R.string.settings_dc_section))
+                SettingsSubsectionTitle(text = stringResource(R.string.settings_dc_section))
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.settings_dc_description),
@@ -421,13 +467,10 @@ fun SettingsScreen(
                     isError = dcError != null,
                     supportingText = dcError?.let { { Text(it) } },
                 )
-            }
 
-            if (!autoOptimizeConnection) {
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Performance section
-                SectionHeader(text = stringResource(R.string.settings_perf_section))
+                SettingsSubsectionTitle(text = stringResource(R.string.settings_perf_section))
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = stringResource(R.string.settings_perf_description),
@@ -464,8 +507,90 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            SectionHeader(text = stringResource(R.string.settings_theme))
+            SectionHeader(text = stringResource(R.string.settings_background))
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = stringResource(R.string.settings_background_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_keep_cpu_awake),
+                description = stringResource(R.string.settings_keep_cpu_awake_desc),
+                checked = keepCpuAwake,
+                onCheckedChange = { keepCpuAwake = it },
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_preconnect_ws),
+                description = stringResource(R.string.settings_preconnect_ws_desc),
+                checked = preconnectWebSockets,
+                onCheckedChange = { preconnectWebSockets = it },
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = stringResource(R.string.settings_ws_ping_interval),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                text = stringResource(R.string.settings_ws_ping_interval_desc),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(modifier = Modifier.height(8.dp))
+            val pingIntervals = listOf(30, 90, 180)
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                pingIntervals.forEachIndexed { index, seconds ->
+                    SegmentedButton(
+                        selected = webSocketPingIntervalSeconds == seconds,
+                        onClick = { webSocketPingIntervalSeconds = seconds },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = pingIntervals.size),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(stringResource(R.string.settings_seconds_short, seconds))
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_route_probes),
+                description = stringResource(R.string.settings_route_probes_desc),
+                checked = routeProbesEnabled,
+                onCheckedChange = { routeProbesEnabled = it },
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_cf_refresh),
+                description = stringResource(R.string.settings_cf_refresh_desc),
+                checked = cfDomainRefreshEnabled,
+                onCheckedChange = { cfDomainRefreshEnabled = it },
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            SectionHeader(text = stringResource(R.string.settings_interface))
+            Spacer(modifier = Modifier.height(8.dp))
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_notification_traffic),
+                description = stringResource(R.string.settings_notification_traffic_desc),
+                checked = showTrafficInNotification,
+                onCheckedChange = { showTrafficInNotification = it },
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_detailed_stats),
+                description = stringResource(R.string.settings_detailed_stats_desc),
+                checked = showDetailedStats,
+                onCheckedChange = { showDetailedStats = it },
+            )
+
+            Spacer(modifier = Modifier.height(20.dp))
+            SettingsSubsectionTitle(text = stringResource(R.string.settings_theme))
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = stringResource(R.string.settings_theme_mode),
                 style = MaterialTheme.typography.bodyMedium,
@@ -520,27 +645,27 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            SectionHeader(text = stringResource(R.string.settings_interface))
+            SectionHeader(text = stringResource(R.string.settings_support))
             Spacer(modifier = Modifier.height(8.dp))
-            Row(
+            OutlinedButton(
+                onClick = onOpenLogs,
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             ) {
+                Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.settings_detailed_stats))
                     Text(
-                        text = stringResource(R.string.settings_detailed_stats_desc),
+                        text = stringResource(R.string.settings_connection_log),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_connection_log_desc),
+                        modifier = Modifier.fillMaxWidth(),
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
-                Switch(
-                    checked = showDetailedStats,
-                    onCheckedChange = { showDetailedStats = it },
-                    colors = tgSwitchColors(),
-                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -557,6 +682,45 @@ private fun SectionHeader(text: String) {
         modifier = Modifier.padding(vertical = 4.dp),
     )
     HorizontalDivider()
+}
+
+@Composable
+private fun SettingsSubsectionTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+}
+
+@Composable
+private fun SettingsSwitchRow(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title)
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = tgSwitchColors(),
+        )
+    }
 }
 
 @Composable

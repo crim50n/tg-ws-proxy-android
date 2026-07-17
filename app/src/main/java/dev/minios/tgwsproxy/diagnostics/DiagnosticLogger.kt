@@ -13,8 +13,6 @@ import java.util.Locale
 
 data class DiagnosticState(
     val isRecording: Boolean = false,
-    val expiresAtMs: Long = 0L,
-    val remainingMinutes: Long = 0L,
     val sizeBytes: Long = 0L,
 ) {
     val hasLog: Boolean get() = sizeBytes > 0
@@ -65,10 +63,10 @@ object DiagnosticRedactor {
 
 object DiagnosticLogger {
     private const val PREFS_NAME = "diagnostic_logging"
-    private const val KEY_EXPIRES_AT = "expires_at"
-    private const val RECORDING_DURATION_MS = 5 * 60_000L
+    private const val KEY_RECORDING = "recording"
+    private const val LEGACY_KEY_EXPIRES_AT = "expires_at"
     private const val RETENTION_MS = 7 * 24 * 60 * 60_000L
-    private const val MAX_FILE_BYTES = 1024 * 1024L
+    private const val MAX_FILE_BYTES = 2 * 1024 * 1024L
     private const val LOG_DIR = "diagnostics"
     private const val CURRENT_LOG = "diagnostic.log"
     private const val PREVIOUS_LOG = "diagnostic.old.log"
@@ -87,6 +85,7 @@ object DiagnosticLogger {
     fun initialize(context: Context) {
         appContext = context.applicationContext
         synchronized(lock) {
+            migrateLegacyRecording(context.applicationContext)
             deleteExpiredFiles()
             refreshState()
             loadEntries(context.applicationContext)
@@ -98,14 +97,17 @@ object DiagnosticLogger {
         synchronized(lock) {
             currentFile(context).delete()
             previousFile(context).delete()
-            val expiresAt = System.currentTimeMillis() + RECORDING_DURATION_MS
-            preferences(context).edit().putLong(KEY_EXPIRES_AT, expiresAt).apply()
+            preferences(context).edit()
+                .putBoolean(KEY_RECORDING, true)
+                .remove(LEGACY_KEY_EXPIRES_AT)
+                .apply()
             refreshState()
         }
         event(
             "diagnostics_started",
             "appVersion" to "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
             "androidApi" to Build.VERSION.SDK_INT,
+            "maxStoredMb" to 4,
         )
     }
 
@@ -113,7 +115,7 @@ object DiagnosticLogger {
         val context = appContext ?: return
         event("diagnostics_stopped")
         synchronized(lock) {
-            preferences(context).edit().remove(KEY_EXPIRES_AT).apply()
+            preferences(context).edit().putBoolean(KEY_RECORDING, false).apply()
             refreshState()
         }
     }
@@ -190,11 +192,7 @@ object DiagnosticLogger {
     }
 
     private fun isRecording(context: Context): Boolean {
-        val expiresAt = preferences(context).getLong(KEY_EXPIRES_AT, 0L)
-        if (expiresAt > System.currentTimeMillis()) return true
-        if (expiresAt != 0L) preferences(context).edit().remove(KEY_EXPIRES_AT).apply()
-        refreshState()
-        return false
+        return preferences(context).getBoolean(KEY_RECORDING, false)
     }
 
     private fun rotateIfNeeded(context: Context) {
@@ -215,21 +213,20 @@ object DiagnosticLogger {
 
     private fun refreshState() {
         val context = appContext ?: return
-        val expiresAt = preferences(context).getLong(KEY_EXPIRES_AT, 0L)
-        val recording = expiresAt > System.currentTimeMillis()
-        if (!recording && expiresAt != 0L) {
-            preferences(context).edit().remove(KEY_EXPIRES_AT).apply()
-        }
         _state.value = DiagnosticState(
-            isRecording = recording,
-            expiresAtMs = if (recording) expiresAt else 0L,
-            remainingMinutes = if (recording) {
-                ((expiresAt - System.currentTimeMillis() + 59_999) / 60_000).coerceAtLeast(1)
-            } else {
-                0L
-            },
+            isRecording = isRecording(context),
             sizeBytes = currentFile(context).length() + previousFile(context).length(),
         )
+    }
+
+    private fun migrateLegacyRecording(context: Context) {
+        val prefs = preferences(context)
+        if (!prefs.contains(LEGACY_KEY_EXPIRES_AT)) return
+        val wasRecording = prefs.getLong(LEGACY_KEY_EXPIRES_AT, 0L) > System.currentTimeMillis()
+        prefs.edit()
+            .remove(LEGACY_KEY_EXPIRES_AT)
+            .putBoolean(KEY_RECORDING, wasRecording)
+            .apply()
     }
 
     private fun loadEntries(context: Context) {

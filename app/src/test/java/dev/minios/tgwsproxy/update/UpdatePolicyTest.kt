@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class UpdatePolicyTest {
@@ -12,6 +13,15 @@ class UpdatePolicyTest {
         versionCode = versionCode,
         releaseUrl = "https://github.com/crim50n/tg-ws-proxy-android/releases/tag/v$version",
     )
+
+    private fun installableRelease(version: String): UpdateInfo {
+        val apkName = "tg-ws-proxy-$version.apk"
+        val base = "https://github.com/crim50n/tg-ws-proxy-android/releases/download/v$version/"
+        return release(version).copy(
+            apkUrl = base + apkName,
+            checksumUrl = base + "$apkName.sha256",
+        )
+    }
 
     @Test
     fun comparesNumericVersionSegments() {
@@ -43,5 +53,32 @@ class UpdatePolicyTest {
             ),
         )
         assertFalse(UpdateValidator.isValid(UpdateInfo("5.0.0", "https://example.com/tag/v5.0.0")))
+    }
+
+    @Test
+    fun acceptsOnlyExpectedApkAndChecksumAssets() {
+        assertTrue(UpdateValidator.isValid(installableRelease("5.0.0")))
+        assertFalse(UpdateValidator.isValid(installableRelease("5.0.0").copy(checksumUrl = null)))
+        assertFalse(
+            UpdateValidator.isValid(
+                installableRelease("5.0.0").copy(
+                    apkUrl = "https://example.com/tg-ws-proxy-5.0.0.apk",
+                ),
+            ),
+        )
+        assertFalse(
+            UpdateValidator.isValid(
+                installableRelease("5.0.0").copy(
+                    checksumUrl = "https://github.com/crim50n/tg-ws-proxy-android/releases/download/v5.0.0/other.sha256",
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun parsesSha256AssetAndRejectsInvalidContent() {
+        val checksum = "a".repeat(64)
+        assertEquals(checksum, parseSha256("$checksum  tg-ws-proxy-5.0.0.apk\n"))
+        assertThrows(IllegalArgumentException::class.java) { parseSha256("not-a-checksum") }
     }
 }

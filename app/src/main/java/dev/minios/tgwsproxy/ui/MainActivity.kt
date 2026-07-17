@@ -80,8 +80,9 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun AppNavigation(viewModel: MainViewModel) {
     val config by viewModel.config.collectAsState()
-    val isRunning by viewModel.isRunning.collectAsState()
+    val serviceState by viewModel.serviceState.collectAsState()
     val runtimeRouteMode by viewModel.runtimeRouteMode.collectAsState()
+    val startFailure by viewModel.startFailure.collectAsState()
     val stats by viewModel.stats.collectAsState()
     val cfTestResult by viewModel.cfTestResult.collectAsState()
     val diagnosticState by viewModel.diagnosticState.collectAsState()
@@ -108,11 +109,13 @@ private fun AppNavigation(viewModel: MainViewModel) {
         Screen.Main -> {
             MainScreen(
                 config = config,
-                isRunning = isRunning,
+                serviceState = serviceState,
                 runtimeRouteMode = runtimeRouteMode,
+                startFailure = startFailure,
                 stats = stats,
                 connectionAdvice = connectionAdvice,
                 updateState = updateState,
+                diagnosticRecording = diagnosticState.isRecording,
                 onStart = { viewModel.startProxy() },
                 onStop = { viewModel.stopProxy() },
                 onOpenInTelegram = { viewModel.openInTelegram() },
@@ -121,7 +124,6 @@ private fun AppNavigation(viewModel: MainViewModel) {
                     viewModel.beginSettings()
                     currentScreen = Screen.Settings
                 },
-                onOpenLogs = { currentScreen = Screen.Logs },
                 onOpenHelp = { currentScreen = Screen.Help },
                 onOpenAbout = { currentScreen = Screen.About },
                 onOpenUpdate = { viewModel.openAvailableUpdate() },
@@ -140,6 +142,7 @@ private fun AppNavigation(viewModel: MainViewModel) {
                 onAppearanceChange = { appTheme, dynamicColor ->
                     viewModel.updateAppearance(appTheme, dynamicColor)
                 },
+                onOpenLogs = { currentScreen = Screen.Logs },
             )
         }
         Screen.About -> {
@@ -152,7 +155,7 @@ private fun AppNavigation(viewModel: MainViewModel) {
             )
         }
         Screen.Logs -> {
-            BackHandler { currentScreen = Screen.Main }
+            BackHandler { currentScreen = Screen.Settings }
             LogScreen(
                 entries = diagnosticEntries,
                 diagnosticState = diagnosticState,
@@ -160,7 +163,7 @@ private fun AppNavigation(viewModel: MainViewModel) {
                 onStopDiagnostics = { viewModel.stopDiagnostics() },
                 onExportDiagnostics = { viewModel.exportDiagnostics() },
                 onClearDiagnostics = { viewModel.clearDiagnostics() },
-                onBack = { currentScreen = Screen.Main },
+                onBack = { currentScreen = Screen.Settings },
             )
         }
         Screen.Help -> {

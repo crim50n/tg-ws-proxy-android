@@ -18,6 +18,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.Executors
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.data.ConfigRepository
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
@@ -26,10 +27,12 @@ import dev.minios.tgwsproxy.diagnostics.analyzeConnectionMode
 import dev.minios.tgwsproxy.diagnostics.withConnectionAdvice
 import dev.minios.tgwsproxy.diagnostics.withAutomaticRouteDefaults
 import dev.minios.tgwsproxy.diagnostics.withAutomaticPerformanceDefaults
+import dev.minios.tgwsproxy.diagnostics.withRuntimeConnectionPreferences
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
 import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyStats
 import dev.minios.tgwsproxy.proxy.ProxyConfig
+import dev.minios.tgwsproxy.proxy.ProxyPortInUseException
 import dev.minios.tgwsproxy.proxy.RouteHealthProbe
 import dev.minios.tgwsproxy.proxy.RuntimeRouteMode
 import dev.minios.tgwsproxy.proxy.runtimeRouteMode
@@ -43,6 +46,18 @@ private const val NOTIFICATION_ID = 1
 private const val ADVICE_NOTIFICATION_ID = 2
 private const val ACTION_STOP = "dev.minios.tgwsproxy.STOP"
 private const val ACTION_RESTART = "dev.minios.tgwsproxy.RESTART"
+private const val ACTION_RESTORE_NOTIFICATION = "dev.minios.tgwsproxy.RESTORE_NOTIFICATION"
+private const val RUNTIME_STOP_TIMEOUT_MS = 5_000L
+
+sealed interface ProxyStartFailure {
+    data class PortInUse(val port: Int) : ProxyStartFailure
+}
+
+enum class ProxyServiceState { STOPPED, STARTING, RUNNING, RESTARTING, STOPPING }
+
+internal val ProxyServiceState.acceptsStart: Boolean get() = this == ProxyServiceState.STOPPED
+internal val ProxyServiceState.acceptsRestart: Boolean
+    get() = this == ProxyServiceState.STARTING || this == ProxyServiceState.RUNNING
 
 /**
  * Foreground service that runs the MTProto proxy server.
@@ -52,12 +67,16 @@ class ProxyService : Service() {
     var server: TgWsProxyServer? = null
         private set
     private var serviceScope: CoroutineScope? = null
-    private val lifecycleScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val lifecycleDispatcher = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "proxy-lifecycle")
+    }.asCoroutineDispatcher()
+    private val lifecycleScope = CoroutineScope(lifecycleDispatcher + SupervisorJob())
     private val runtimeMutex = Mutex()
     private var wakeLock: PowerManager.WakeLock? = null
     private var serverJob: Job? = null
     private var restartJob: Job? = null
-    private var notificationWatchdogJob: Job? = null
+    private var stopJob: Job? = null
+    private var notificationUpdateJob: Job? = null
     private var routeProbeJob: Job? = null
     private var networkChangeJob: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -68,19 +87,27 @@ class ProxyService : Service() {
     @Volatile private var hasSeenNetwork = false
     @Volatile private var notificationHost = "127.0.0.1"
     @Volatile private var notificationPort = 1443
+    @Volatile private var notificationShowTraffic = false
+    @Volatile private var stopRequested = false
     private lateinit var notificationManager: NotificationManager
 
     companion object {
         private val _runtimeRouteMode = MutableStateFlow<RuntimeRouteMode?>(null)
         val runtimeRouteMode: StateFlow<RuntimeRouteMode?> = _runtimeRouteMode.asStateFlow()
+        private val _startFailure = MutableStateFlow<ProxyStartFailure?>(null)
+        val startFailure: StateFlow<ProxyStartFailure?> = _startFailure.asStateFlow()
+        private val _serviceState = MutableStateFlow(ProxyServiceState.STOPPED)
+        val serviceState: StateFlow<ProxyServiceState> = _serviceState.asStateFlow()
 
         @Volatile
         var instance: ProxyService? = null
             private set
 
-        val isRunning: Boolean get() = instance?.server?.isRunning == true
+        val isRunning: Boolean get() = _serviceState.value == ProxyServiceState.RUNNING
+        val isActive: Boolean get() = _serviceState.value != ProxyServiceState.STOPPED
 
         fun start(context: Context) {
+            if (!_serviceState.value.acceptsStart) return
             val intent = Intent(context, ProxyService::class.java)
             context.startForegroundService(intent)
         }
@@ -91,6 +118,7 @@ class ProxyService : Service() {
         }
 
         fun restart(context: Context) {
+            if (!_serviceState.value.acceptsRestart) return
             instance?.requestRestart() ?: start(context)
         }
     }
@@ -120,6 +148,32 @@ class ProxyService : Service() {
                 requestRestart()
                 return START_STICKY
             }
+            ACTION_RESTORE_NOTIFICATION -> {
+                if (_serviceState.value in setOf(
+                        ProxyServiceState.STARTING,
+                        ProxyServiceState.RUNNING,
+                        ProxyServiceState.RESTARTING,
+                    )
+                ) {
+                    DiagnosticLogger.event("notification_restore_requested")
+                    startForeground(
+                        NOTIFICATION_ID,
+                        buildNotification(
+                            notificationHost,
+                            notificationPort,
+                            restarting = _serviceState.value == ProxyServiceState.RESTARTING,
+                            showTraffic = notificationShowTraffic,
+                        ),
+                    )
+                    return START_STICKY
+                }
+                return START_NOT_STICKY
+            }
+        }
+
+        if (stopRequested || _serviceState.value == ProxyServiceState.STOPPING) {
+            stopSelfResult(startId)
+            return START_NOT_STICKY
         }
 
         if (serverJob?.isActive == true) {
@@ -127,6 +181,8 @@ class ProxyService : Service() {
             return START_STICKY
         }
 
+        stopRequested = false
+        _serviceState.value = ProxyServiceState.STARTING
         val notification = buildNotification(notificationHost, notificationPort)
         startForeground(NOTIFICATION_ID, notification)
         startProxyRuntime()
@@ -135,7 +191,8 @@ class ProxyService : Service() {
     }
 
     private fun startProxyRuntime() {
-        if (serverJob?.isActive == true) return
+        if (serverJob?.isActive == true || stopRequested) return
+        _startFailure.value = null
 
         serviceScope?.cancel()
         serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -144,7 +201,7 @@ class ProxyService : Service() {
             try {
                 val configRepo = ConfigRepository(applicationContext)
                 val savedConfig = configRepo.getConfig()
-                val config = if (savedConfig.autoOptimizeConnection) {
+                val routedConfig = if (savedConfig.autoOptimizeConnection) {
                     val automaticDefault = savedConfig.withAutomaticRouteDefaults()
                     automaticRouteOverride?.let {
                         automaticDefault.withConnectionAdvice(it).withAutomaticPerformanceDefaults()
@@ -152,6 +209,7 @@ class ProxyService : Service() {
                 } else {
                     savedConfig
                 }
+                val config = routedConfig.withRuntimeConnectionPreferences()
                 val runtimeId = ++runtimeGeneration
                 notificationManager.cancel(ADVICE_NOTIFICATION_ID)
                 _runtimeRouteMode.value = config.runtimeRouteMode()
@@ -164,6 +222,12 @@ class ProxyService : Service() {
                     "cfBeforeTcp" to config.cfProxyPriority,
                     "cfFirst" to config.cfProxyFirst,
                     "autoOptimize" to config.autoOptimizeConnection,
+                    "keepCpuAwake" to config.keepCpuAwake,
+                    "preconnectWs" to config.preconnectWebSockets,
+                    "routeProbes" to config.routeProbesEnabled,
+                    "cfRefresh" to config.cfDomainRefreshEnabled,
+                    "wsPingSeconds" to config.webSocketPingIntervalSeconds,
+                    "notificationTraffic" to config.showTrafficInNotification,
                     "redirectCount" to config.dcRedirects.size,
                     "runtimeId" to runtimeId,
                 )
@@ -192,59 +256,86 @@ class ProxyService : Service() {
                     }
                 }
 
-                // Acquire wake lock
-                acquireWakeLock()
+                if (config.keepCpuAwake) acquireWakeLock()
 
                 // Start background CF domain refresh.
-                if (config.cfProxyEnabled) {
+                if (config.cfProxyEnabled && config.cfDomainRefreshEnabled) {
                     CfProxyDomains.startBackgroundRefresh()
                 }
 
                 // Update notification with actual config
-                updateNotification(config.host, config.port)
+                updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
 
                 // Start server
                 val srv = TgWsProxyServer(config)
                 server = srv
                 registerNetworkCallback(config, runtimeId)
                 srv.onStatusChange = { running ->
-                    if (running) {
-                        updateNotification(config.host, config.port)
-                        startRouteProbe(config, runtimeId)
+                    if (running && !stopRequested) {
+                        _serviceState.value = ProxyServiceState.RUNNING
+                        _startFailure.value = null
+                        updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
+                        if (config.routeProbesEnabled) startRouteProbe(config, runtimeId)
                     }
                 }
 
                 Log.i(TAG, "Starting proxy server on ${config.host}:${config.port}")
-                startNotificationWatchdog(config.host, config.port)
+                startNotificationUpdates(config.host, config.port, config.showTrafficInNotification)
                 srv.start() // blocks until stopped
             } catch (e: CancellationException) {
                 Log.i(TAG, "Server job cancelled")
                 DiagnosticLogger.event("runtime_cancelled")
+            } catch (e: ProxyPortInUseException) {
+                Log.e(TAG, "Proxy port ${e.port} is already in use")
+                _startFailure.value = ProxyStartFailure.PortInUse(e.port)
+                DiagnosticLogger.event(
+                    "listener_bind_failed",
+                    "port" to e.port,
+                    "reason" to "port_in_use",
+                )
+                if (!stopRequested) stopAfterRuntimeFailure()
             } catch (e: Exception) {
                 Log.e(TAG, "Server failed: ${e.message}", e)
                 DiagnosticLogger.failure("runtime_failed", e)
+                if (!stopRequested) stopAfterRuntimeFailure()
             } finally {
-                stopNotificationWatchdog()
+                stopNotificationUpdates()
                 stopRouteProbe()
                 unregisterNetworkCallback()
                 CfProxyDomains.stopBackgroundRefresh()
                 releaseWakeLock()
                 server = null
                 _runtimeRouteMode.value = null
+                if (!stopRequested && _serviceState.value == ProxyServiceState.RUNNING) {
+                    _serviceState.value = ProxyServiceState.STOPPED
+                }
                 Log.i(TAG, "Server job completed")
                 DiagnosticLogger.event("runtime_completed")
             }
         }
     }
 
+    private fun stopAfterRuntimeFailure() {
+        _serviceState.value = ProxyServiceState.STOPPED
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     private suspend fun stopProxyRuntime() {
         val job = serverJob
-        stopNotificationWatchdog()
+        stopNotificationUpdates()
         stopRouteProbe()
         unregisterNetworkCallback()
         CfProxyDomains.stopBackgroundRefresh()
         server?.stop()
-        job?.cancelAndJoin()
+        val stopped = withTimeoutOrNull(RUNTIME_STOP_TIMEOUT_MS) {
+            job?.cancelAndJoin()
+            true
+        } ?: false
+        if (!stopped) {
+            Log.e(TAG, "Proxy runtime did not stop within ${RUNTIME_STOP_TIMEOUT_MS}ms")
+            DiagnosticLogger.event("runtime_stop_timeout", "timeoutMs" to RUNTIME_STOP_TIMEOUT_MS)
+        }
         if (serverJob === job) serverJob = null
         server = null
         _runtimeRouteMode.value = null
@@ -254,21 +345,26 @@ class ProxyService : Service() {
     }
 
     private fun requestRestart(resetAutomaticRoute: Boolean = true) {
+        if (stopRequested || !_serviceState.value.acceptsRestart) return
         if (resetAutomaticRoute) automaticRouteOverride = null
         if (restartJob?.isActive == true) return
         restartJob = lifecycleScope.launch {
             runtimeMutex.withLock {
+                if (stopRequested) return@withLock
+                _serviceState.value = ProxyServiceState.RESTARTING
                 Log.i(TAG, "Restarting proxy runtime...")
                 DiagnosticLogger.event("runtime_restarting")
                 updateNotification(notificationHost, notificationPort, restarting = true)
                 stopProxyRuntime()
                 delay(300)
+                if (stopRequested) return@withLock
                 startProxyRuntime()
             }
         }
     }
 
     private fun applyAutomaticAdvice(advice: ConnectionAdvice) {
+        if (stopRequested) return
         automaticRouteOverride = advice
         notificationManager.cancel(ADVICE_NOTIFICATION_ID)
         DiagnosticLogger.event("connection_advice_applied", "advice" to advice.name, "source" to "automatic")
@@ -276,13 +372,19 @@ class ProxyService : Service() {
     }
 
     private fun requestStop() {
-        if (restartJob?.isActive == true) restartJob?.cancel()
-        lifecycleScope.launch {
+        if (stopRequested) return
+        stopRequested = true
+        _serviceState.value = ProxyServiceState.STOPPING
+        _startFailure.value = null
+        DiagnosticLogger.event("service_stop_requested")
+        restartJob?.cancel()
+        networkChangeJob?.cancel()
+        stopJob = lifecycleScope.launch {
             runtimeMutex.withLock {
                 Log.i(TAG, "Stopping server and service...")
-                DiagnosticLogger.event("service_stop_requested")
                 stopProxyRuntime()
             }
+            _serviceState.value = ProxyServiceState.STOPPED
             withContext(Dispatchers.Main.immediate) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -291,7 +393,7 @@ class ProxyService : Service() {
     }
 
     private fun stopProxyRuntimeNow() {
-        stopNotificationWatchdog()
+        stopNotificationUpdates()
         stopRouteProbe()
         unregisterNetworkCallback()
         CfProxyDomains.stopBackgroundRefresh()
@@ -310,9 +412,14 @@ class ProxyService : Service() {
         DiagnosticLogger.event("service_destroying")
         restartJob?.cancel()
         restartJob = null
+        stopJob?.cancel()
+        stopJob = null
+        stopRequested = true
         stopProxyRuntimeNow()
         lifecycleScope.cancel()
+        lifecycleDispatcher.close()
         instance = null
+        _serviceState.value = ProxyServiceState.STOPPED
         super.onDestroy()
     }
 
@@ -394,13 +501,14 @@ class ProxyService : Service() {
         networkChangeJob?.cancel()
         networkChangeJob = lifecycleScope.launch {
             delay(750)
+            if (stopRequested) return@launch
             DiagnosticLogger.event("network_changed", "transport" to transports)
             if (config.autoOptimizeConnection) {
                 automaticRouteOverride = null
                 requestRestart(resetAutomaticRoute = true)
             } else {
                 server?.onNetworkChanged()
-                startRouteProbe(config, runtimeId)
+                if (config.routeProbesEnabled) startRouteProbe(config, runtimeId)
             }
         }
     }
@@ -431,28 +539,19 @@ class ProxyService : Service() {
         routeProbeJob = null
     }
 
-    private fun startNotificationWatchdog(host: String, port: Int) {
-        if (notificationWatchdogJob?.isActive == true) return
-        notificationWatchdogJob = serviceScope?.launch {
+    private fun startNotificationUpdates(host: String, port: Int, showTraffic: Boolean) {
+        if (!showTraffic || notificationUpdateJob?.isActive == true) return
+        notificationUpdateJob = serviceScope?.launch {
             while (isActive) {
                 delay(5_000)
-                if (!isNotificationVisible()) {
-                    Log.i(TAG, "Foreground notification was dismissed, restoring it")
-                    startForeground(NOTIFICATION_ID, buildNotification(host, port))
-                } else {
-                    updateNotification(host, port)
-                }
+                updateNotification(host, port, showTraffic = true)
             }
         }
     }
 
-    private fun stopNotificationWatchdog() {
-        notificationWatchdogJob?.cancel()
-        notificationWatchdogJob = null
-    }
-
-    private fun isNotificationVisible(): Boolean {
-        return notificationManager.activeNotifications.any { it.id == NOTIFICATION_ID }
+    private fun stopNotificationUpdates() {
+        notificationUpdateJob?.cancel()
+        notificationUpdateJob = null
     }
 
     private fun createNotificationChannel() {
@@ -505,7 +604,12 @@ class ProxyService : Service() {
         )
     }
 
-    private fun buildNotification(host: String, port: Int, restarting: Boolean = false): Notification {
+    private fun buildNotification(
+        host: String,
+        port: Int,
+        restarting: Boolean = false,
+        showTraffic: Boolean = false,
+    ): Notification {
         val openIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
@@ -530,17 +634,30 @@ class ProxyService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val stats = ProxyStats.snapshot()
-        val traffic = MtProtoConstants.humanBytes(stats.bytesUp + stats.bytesDown)
+        val restoreIntent = Intent(this, ProxyService::class.java).apply {
+            action = ACTION_RESTORE_NOTIFICATION
+        }
+        val restorePi = PendingIntent.getService(
+            this, 4, restoreIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val contentText = when {
+            restarting -> getString(R.string.notification_restarting)
+            showTraffic -> {
+                val stats = ProxyStats.snapshot()
+                val traffic = MtProtoConstants.humanBytes(stats.bytesUp + stats.bytesDown)
+                getString(R.string.notification_running, traffic)
+            }
+            else -> getString(R.string.notification_running_no_traffic)
+        }
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.notification_title))
-            .setContentText(
-                if (restarting) getString(R.string.notification_restarting)
-                else getString(R.string.notification_running, traffic)
-            )
+            .setContentText(contentText)
             .setSubText("$host:$port")
             .setSmallIcon(R.drawable.ic_tile)
             .setContentIntent(openPi)
+            .setDeleteIntent(restorePi)
             .addAction(
                 Notification.Action.Builder(
                     null,
@@ -565,15 +682,21 @@ class ProxyService : Service() {
             }
     }
 
-    private fun updateNotification(host: String, port: Int, restarting: Boolean = false) {
+    private fun updateNotification(
+        host: String,
+        port: Int,
+        restarting: Boolean = false,
+        showTraffic: Boolean = notificationShowTraffic,
+    ) {
         try {
             if (!restarting) {
                 notificationHost = host
                 notificationPort = port
+                notificationShowTraffic = showTraffic
             }
             notificationManager.notify(
                 NOTIFICATION_ID,
-                buildNotification(host, port, restarting),
+                buildNotification(host, port, restarting, showTraffic),
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to update notification: ${e.message}")

@@ -119,9 +119,16 @@ fun ProxyConfig.withAutomaticPerformanceDefaults(): ProxyConfig = copy(
     poolSize = if (cfProxyFirst) 0 else 4,
 )
 
+fun ProxyConfig.withRuntimeConnectionPreferences(): ProxyConfig = if (!preconnectWebSockets) {
+    copy(poolSize = 0)
+} else {
+    this
+}
+
 fun requiresProxyRestart(previous: ProxyConfig, updated: ProxyConfig): Boolean {
     fun ProxyConfig.runtimeSettings(): ProxyConfig {
-        val routing = if (autoOptimizeConnection) withAutomaticRouteDefaults() else this
+        val routing = (if (autoOptimizeConnection) withAutomaticRouteDefaults() else this)
+            .withRuntimeConnectionPreferences()
         return routing.copy(
             showDetailedStats = false,
             appTheme = "system",

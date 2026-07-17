@@ -20,7 +20,9 @@ import dev.minios.tgwsproxy.diagnostics.analyzeConnectionMode
 import dev.minios.tgwsproxy.diagnostics.requiresProxyRestart
 import dev.minios.tgwsproxy.proxy.*
 import dev.minios.tgwsproxy.service.ProxyService
+import dev.minios.tgwsproxy.service.ProxyServiceState
 import dev.minios.tgwsproxy.update.UpdateRepository
+import dev.minios.tgwsproxy.update.UpdateInstaller
 import dev.minios.tgwsproxy.update.UpdatePolicy
 import dev.minios.tgwsproxy.update.UpdateState
 
@@ -35,9 +37,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, ProxyConfig())
     val configLoaded: StateFlow<Boolean> = _configLoaded.asStateFlow()
 
-    private val _isRunning = MutableStateFlow(false)
-    val isRunning: StateFlow<Boolean> = _isRunning.asStateFlow()
+    val serviceState = ProxyService.serviceState
     val runtimeRouteMode = ProxyService.runtimeRouteMode
+    val startFailure = ProxyService.startFailure
 
     private val _stats = MutableStateFlow(StatsSnapshot())
     val stats: StateFlow<StatsSnapshot> = _stats.asStateFlow()
@@ -70,9 +72,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             while (isActive) {
                 DiagnosticLogger.refresh()
-                _isRunning.value = ProxyService.isRunning
-                if (_isRunning.value) {
+                if (ProxyService.isRunning) {
                     _stats.value = ProxyStats.snapshot()
+                } else if (!ProxyService.isActive) {
+                    _stats.value = StatsSnapshot()
                 }
                 delay(1000)
             }
@@ -80,7 +83,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startProxy() {
-        if (_isRunning.value || ProxyService.isRunning) return
+        if (ProxyService.isActive) return
         val ctx = getApplication<Application>()
         ProxyService.start(ctx)
     }
@@ -88,7 +91,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopProxy() {
         val ctx = getApplication<Application>()
         ProxyService.stop(ctx)
-        _isRunning.value = false
     }
 
     fun saveConfig(newConfig: ProxyConfig) {
@@ -107,7 +109,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val runtimeChanged = requiresProxyRestart(initialConfig, latestConfig)
         viewModelScope.launch {
             configRepo.saveConfig(latestConfig)
-            if (runtimeChanged && (_isRunning.value || ProxyService.isRunning)) {
+            if (runtimeChanged && ProxyService.serviceState.value in setOf(
+                    ProxyServiceState.STARTING,
+                    ProxyServiceState.RUNNING,
+                )
+            ) {
                 ProxyService.restart(getApplication<Application>())
             }
         }
@@ -160,8 +166,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openAvailableUpdate() {
         val manifest = (_updateState.value as? UpdateState.Available)?.release ?: return
         val ctx = getApplication<Application>()
+        if (manifest.apkUrl == null || manifest.checksumUrl == null) {
+            openReleasePage(manifest.releaseUrl)
+            return
+        }
+        if (!UpdateInstaller.canInstallPackages(ctx)) {
+            try {
+                UpdateInstaller.openInstallPermission(ctx)
+                _toastMessage.tryEmit(ctx.getString(R.string.update_install_permission_required))
+            } catch (_: Exception) {
+                _toastMessage.tryEmit(ctx.getString(R.string.update_install_permission_failed))
+            }
+            return
+        }
+        _updateState.value = UpdateState.Downloading(manifest)
+        viewModelScope.launch {
+            updateRepository.downloadApk(manifest).fold(
+                onSuccess = { apk ->
+                    try {
+                        UpdateInstaller.verify(ctx, apk, manifest)
+                        DiagnosticLogger.event(
+                            "update_apk_verified",
+                            "version" to manifest.versionName,
+                        )
+                        UpdateInstaller.install(ctx, apk)
+                    } catch (error: Exception) {
+                        DiagnosticLogger.failure("update_install_failed", error)
+                        _toastMessage.tryEmit(ctx.getString(R.string.update_install_failed))
+                    } finally {
+                        _updateState.value = UpdateState.Available(manifest)
+                    }
+                },
+                onFailure = { error ->
+                    DiagnosticLogger.failure("update_download_failed", error)
+                    _updateState.value = UpdateState.Available(manifest)
+                    _toastMessage.tryEmit(ctx.getString(R.string.update_download_failed))
+                },
+            )
+        }
+    }
+
+    private fun openReleasePage(releaseUrl: String) {
+        val ctx = getApplication<Application>()
         try {
-            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(manifest.releaseUrl)).apply {
+            ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl)).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             })
         } catch (_: Exception) {

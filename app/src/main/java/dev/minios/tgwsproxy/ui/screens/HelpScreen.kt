@@ -36,6 +36,7 @@ fun HelpScreen(onBack: () -> Unit) {
         HelpSection(Icons.Default.Cloud, R.string.help_cf_title, R.string.help_cf_text),
         HelpSection(Icons.AutoMirrored.Filled.AltRoute, R.string.help_dc_title, R.string.help_dc_text),
         HelpSection(Icons.Default.Tune, R.string.help_advanced_title, R.string.help_advanced_text),
+        HelpSection(Icons.Default.BatterySaver, R.string.help_battery_title, R.string.help_battery_text),
         HelpSection(Icons.Default.Palette, R.string.help_theme_title, R.string.help_theme_text),
         HelpSection(Icons.AutoMirrored.Filled.ReceiptLong, R.string.help_log_title, R.string.help_log_text),
         HelpSection(Icons.Default.Build, R.string.help_troubleshooting_title, R.string.help_troubleshooting_text),

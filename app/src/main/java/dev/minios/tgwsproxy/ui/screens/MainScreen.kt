@@ -9,12 +9,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
-import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -28,6 +28,8 @@ import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.proxy.StatsSnapshot
 import dev.minios.tgwsproxy.proxy.RuntimeRouteMode
+import dev.minios.tgwsproxy.service.ProxyStartFailure
+import dev.minios.tgwsproxy.service.ProxyServiceState
 import dev.minios.tgwsproxy.ui.theme.*
 import dev.minios.tgwsproxy.update.UpdateState
 
@@ -35,21 +37,24 @@ import dev.minios.tgwsproxy.update.UpdateState
 @Composable
 fun MainScreen(
     config: ProxyConfig,
-    isRunning: Boolean,
+    serviceState: ProxyServiceState,
     runtimeRouteMode: RuntimeRouteMode?,
+    startFailure: ProxyStartFailure?,
     stats: StatsSnapshot,
     connectionAdvice: ConnectionAdvice?,
     updateState: UpdateState,
+    diagnosticRecording: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpenInTelegram: () -> Unit,
     onCopyLink: () -> Unit,
     onOpenSettings: () -> Unit,
-    onOpenLogs: () -> Unit,
     onOpenHelp: () -> Unit,
     onOpenAbout: () -> Unit,
     onOpenUpdate: () -> Unit,
 ) {
+    val isRunning = serviceState == ProxyServiceState.RUNNING
+    val isActive = serviceState != ProxyServiceState.STOPPED
     val proxyLink = remember(config) { config.proxyLink() }
     var menuExpanded by remember { mutableStateOf(false) }
     Scaffold(
@@ -74,14 +79,6 @@ fun MainScreen(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false },
                         ) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.log_title)) },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null) },
-                                onClick = {
-                                    menuExpanded = false
-                                    onOpenLogs()
-                                },
-                            )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.help_title)) },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null) },
@@ -112,7 +109,11 @@ fun MainScreen(
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            val availableUpdate = (updateState as? UpdateState.Available)?.release
+            val availableUpdate = when (updateState) {
+                is UpdateState.Available -> updateState.release
+                is UpdateState.Downloading -> updateState.release
+                else -> null
+            }
             AnimatedVisibility(
                 visible = availableUpdate != null,
                 enter = fadeIn() + expandVertically(),
@@ -122,6 +123,8 @@ fun MainScreen(
                     Column {
                         UpdateCard(
                             versionName = availableUpdate.versionName,
+                            downloading = updateState is UpdateState.Downloading,
+                            installable = availableUpdate.apkUrl != null && availableUpdate.checksumUrl != null,
                             onOpenUpdate = onOpenUpdate,
                         )
                         Spacer(modifier = Modifier.height(16.dp))
@@ -130,11 +133,29 @@ fun MainScreen(
             }
 
             StatusCard(
-                isRunning = isRunning,
+                serviceState = serviceState,
                 config = config,
                 uptimeSeconds = stats.uptimeSeconds,
                 runtimeRouteMode = runtimeRouteMode,
+                diagnosticRecording = diagnosticRecording,
             )
+
+            AnimatedVisibility(
+                visible = startFailure is ProxyStartFailure.PortInUse && startFailure.port == config.port,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                val failure = startFailure as? ProxyStartFailure.PortInUse
+                if (failure != null) {
+                    Column {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        PortInUseCard(
+                            port = failure.port,
+                            onOpenSettings = onOpenSettings,
+                        )
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -152,7 +173,7 @@ fun MainScreen(
             }
 
             ControlsCard(
-                isRunning = isRunning,
+                serviceState = serviceState,
                 onStart = onStart,
                 onStop = onStop,
                 onOpenInTelegram = onOpenInTelegram,
@@ -161,7 +182,21 @@ fun MainScreen(
             )
 
             AnimatedVisibility(
-                visible = isRunning && config.showDetailedStats,
+                visible = shouldWarnRejectedConnections(
+                    total = stats.connectionsTotal,
+                    rejected = stats.connectionsBad,
+                ),
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                Column {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    RejectedConnectionsWarning()
+                }
+            }
+
+            AnimatedVisibility(
+                visible = isActive && config.showDetailedStats,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically(),
             ) {
@@ -169,6 +204,83 @@ fun MainScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                     StatsCard(stats = stats)
                 }
+            }
+        }
+    }
+}
+
+internal fun shouldWarnRejectedConnections(total: Int, rejected: Int): Boolean {
+    return total >= 20 && rejected >= 10 && rejected.toLong() * 5 >= total.toLong()
+}
+
+@Composable
+private fun RejectedConnectionsWarning() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.WarningAmber,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.rejected_warning_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.rejected_warning_message),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PortInUseCard(port: Int, onOpenSettings: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.ErrorOutline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = stringResource(R.string.port_in_use_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = stringResource(R.string.port_in_use_message, port),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            TextButton(
+                onClick = onOpenSettings,
+                modifier = Modifier.align(Alignment.End),
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
+            ) {
+                Text(stringResource(R.string.port_in_use_open_settings))
             }
         }
     }
@@ -211,7 +323,12 @@ private fun ConnectionAdviceCard(advice: ConnectionAdvice) {
 }
 
 @Composable
-private fun UpdateCard(versionName: String, onOpenUpdate: () -> Unit) {
+private fun UpdateCard(
+    versionName: String,
+    downloading: Boolean,
+    installable: Boolean,
+    onOpenUpdate: () -> Unit,
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -242,8 +359,16 @@ private fun UpdateCard(versionName: String, onOpenUpdate: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            TextButton(onClick = onOpenUpdate) {
-                Text(stringResource(R.string.update_open))
+            TextButton(onClick = onOpenUpdate, enabled = !downloading) {
+                if (downloading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Text(
+                        stringResource(
+                            if (installable) R.string.update_install else R.string.update_open_release,
+                        ),
+                    )
+                }
             }
         }
     }
@@ -251,20 +376,26 @@ private fun UpdateCard(versionName: String, onOpenUpdate: () -> Unit) {
 
 @Composable
 private fun StatusCard(
-    isRunning: Boolean,
+    serviceState: ProxyServiceState,
     config: ProxyConfig,
     uptimeSeconds: Long,
     runtimeRouteMode: RuntimeRouteMode?,
+    diagnosticRecording: Boolean,
 ) {
+    val isRunning = serviceState == ProxyServiceState.RUNNING
+    val isTransitioning = serviceState == ProxyServiceState.STARTING ||
+            serviceState == ProxyServiceState.RESTARTING ||
+            serviceState == ProxyServiceState.STOPPING
+    val statusColor = when {
+        isRunning -> StatusGreen
+        isTransitioning -> MaterialTheme.colorScheme.primary
+        else -> StatusRed
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isRunning) {
-                StatusGreen.copy(alpha = 0.1f)
-            } else {
-                StatusRed.copy(alpha = 0.1f)
-            },
+            containerColor = statusColor.copy(alpha = 0.1f),
         ),
     ) {
         Row(
@@ -277,15 +408,17 @@ private fun StatusCard(
                 modifier = Modifier
                     .size(16.dp)
                     .clip(CircleShape)
-                    .background(if (isRunning) StatusGreen else StatusRed),
+                    .background(statusColor),
             )
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = if (isRunning) {
-                        stringResource(R.string.proxy_running)
-                    } else {
-                        stringResource(R.string.proxy_stopped)
+                    text = when (serviceState) {
+                        ProxyServiceState.STOPPED -> stringResource(R.string.proxy_stopped)
+                        ProxyServiceState.STARTING -> stringResource(R.string.proxy_starting)
+                        ProxyServiceState.RUNNING -> stringResource(R.string.proxy_running)
+                        ProxyServiceState.RESTARTING -> stringResource(R.string.proxy_restarting)
+                        ProxyServiceState.STOPPING -> stringResource(R.string.proxy_stopping)
                     },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
@@ -311,6 +444,26 @@ private fun StatusCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                if (diagnosticRecording) {
+                    val recordingAlpha = recordingIndicatorAlpha(isRecording = true)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Surface(
+                            modifier = Modifier
+                                .size(9.dp)
+                                .alpha(recordingAlpha),
+                            shape = CircleShape,
+                            color = StatusRed,
+                        ) {}
+                        Spacer(modifier = Modifier.width(7.dp))
+                        Text(
+                            text = stringResource(R.string.diagnostics_recording_main),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = StatusRed,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
             }
             if (isRunning && uptimeSeconds > 0) {
                 Text(
@@ -327,25 +480,26 @@ private fun StatusCard(
 
 @Composable
 private fun ControlsCard(
-    isRunning: Boolean,
+    serviceState: ProxyServiceState,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpenInTelegram: () -> Unit,
     onCopyLink: () -> Unit,
     proxyLink: String,
 ) {
+    val isActive = serviceState != ProxyServiceState.STOPPED
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             ActionButtons(
-                isRunning = isRunning,
+                serviceState = serviceState,
                 onStart = onStart,
                 onStop = onStop,
             )
             AnimatedVisibility(
-                visible = isRunning,
+                visible = isActive,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically(),
             ) {
@@ -365,18 +519,18 @@ private fun ControlsCard(
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
 private fun ActionButtons(
-    isRunning: Boolean,
+    serviceState: ProxyServiceState,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
     AnimatedContent(
-        targetState = isRunning,
+        targetState = serviceState,
         transitionSpec = {
             fadeIn() togetherWith fadeOut()
         },
         label = "action_buttons",
-    ) { running ->
-        if (!running) {
+    ) { state ->
+        if (state == ProxyServiceState.STOPPED) {
             Button(
                 onClick = onStart,
                 modifier = Modifier.fillMaxWidth(),
@@ -389,16 +543,20 @@ private fun ActionButtons(
                 Text(stringResource(R.string.btn_start))
             }
         } else {
+            val stopping = state == ProxyServiceState.STOPPING
             Button(
                 onClick = onStop,
+                enabled = !stopping,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
                 shape = RoundedCornerShape(12.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             ) {
-                Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.btn_stop))
+                if (!stopping) {
+                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text(stringResource(if (stopping) R.string.btn_stopping else R.string.btn_stop))
             }
         }
     }

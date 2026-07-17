@@ -223,6 +223,29 @@ class ConnectionAdvisorTest {
     }
 
     @Test
+    fun `disabled preconnection forces runtime pool to zero without modifying saved size`() {
+        val saved = ProxyConfig(poolSize = 7, preconnectWebSockets = false)
+
+        val runtime = saved.withRuntimeConnectionPreferences()
+
+        assertEquals(7, saved.poolSize)
+        assertEquals(0, runtime.poolSize)
+        assertEquals(false, runtime.preconnectWebSockets)
+    }
+
+    @Test
+    fun `background connection settings require restart`() {
+        val config = ProxyConfig()
+
+        assertEquals(true, requiresProxyRestart(config, config.copy(keepCpuAwake = false)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(preconnectWebSockets = false)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(routeProbesEnabled = false)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(cfDomainRefreshEnabled = false)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(webSocketPingIntervalSeconds = 90)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(showTrafficInNotification = false)))
+    }
+
+    @Test
     fun `unchanged settings do not require restart`() {
         val config = ProxyConfig()
 

@@ -53,10 +53,15 @@ jobs:
           MANIFEST_VERSION=$(python3 -c 'import json; print(json.load(open("update.json"))["versionName"])')
           MANIFEST_CODE=$(python3 -c 'import json; print(json.load(open("update.json"))["versionCode"])')
           MANIFEST_URL=$(python3 -c 'import json; print(json.load(open("update.json"))["releaseUrl"])')
+          MANIFEST_APK_URL=$(python3 -c 'import json; print(json.load(open("update.json"))["apkUrl"])')
+          MANIFEST_CHECKSUM_URL=$(python3 -c 'import json; print(json.load(open("update.json"))["checksumUrl"])')
           EXPECTED_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${{ steps.version.outputs.name }}"
+          EXPECTED_APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${{ steps.version.outputs.name }}/tg-ws-proxy-${{ steps.version.outputs.name }}.apk"
           test "$MANIFEST_VERSION" = "${{ steps.version.outputs.name }}" || { echo "::error::update.json versionName mismatch"; exit 1; }
           test "$MANIFEST_CODE" = "${{ steps.version.outputs.code }}" || { echo "::error::update.json versionCode mismatch"; exit 1; }
           test "$MANIFEST_URL" = "$EXPECTED_URL" || { echo "::error::update.json releaseUrl mismatch"; exit 1; }
+          test "$MANIFEST_APK_URL" = "$EXPECTED_APK_URL" || { echo "::error::update.json apkUrl mismatch"; exit 1; }
+          test "$MANIFEST_CHECKSUM_URL" = "${EXPECTED_APK_URL}.sha256" || { echo "::error::update.json checksumUrl mismatch"; exit 1; }
 
       - name: Decode Keystore
         env:
@@ -86,12 +91,13 @@ jobs:
             exit 1
           fi
           cp "$APK" "release-apks/tg-ws-proxy-${VERSION}.apk"
+          sha256sum "release-apks/tg-ws-proxy-${VERSION}.apk" > "release-apks/tg-ws-proxy-${VERSION}.apk.sha256"
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: tg-ws-proxy-release-${{ steps.version.outputs.name }}
-          path: release-apks/*.apk
+          path: release-apks/*
           retention-days: 90
 
       - name: Create or update GitHub Release
@@ -103,18 +109,18 @@ jobs:
 
           if gh release view $TAG > /dev/null 2>&1; then
             echo "Release $TAG already exists, uploading APK..."
-            gh release upload $TAG release-apks/*.apk --clobber
+            gh release upload $TAG release-apks/* --clobber
           else
             echo "Creating new release $TAG..."
             if [ -f "RELEASE_NOTES_${VERSION}.md" ]; then
               gh release create $TAG \
                 --title "${VERSION}" \
                 --notes-file "RELEASE_NOTES_${VERSION}.md" \
-                release-apks/*.apk
+                release-apks/*
             else
               gh release create $TAG \
                 --title "${VERSION}" \
                 --generate-notes \
-                release-apks/*.apk
+                release-apks/*
             fi
           fi

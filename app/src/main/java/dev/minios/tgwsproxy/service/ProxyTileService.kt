@@ -21,17 +21,23 @@ class ProxyTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        if (ProxyService.isRunning) {
-            ProxyService.stop(applicationContext)
-            updateTile()
-        } else {
-            scope?.cancel()
-            scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-            scope?.launch {
-                ProxyService.start(applicationContext)
-                // Give the service a moment to start
-                delay(500)
-                withContext(Dispatchers.Main) { updateTile() }
+        when (ProxyService.serviceState.value) {
+            ProxyServiceState.RUNNING,
+            ProxyServiceState.STARTING,
+            ProxyServiceState.RESTARTING -> {
+                ProxyService.stop(applicationContext)
+                updateTile()
+            }
+            ProxyServiceState.STOPPING -> return
+            ProxyServiceState.STOPPED -> {
+                scope?.cancel()
+                scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+                scope?.launch {
+                    ProxyService.start(applicationContext)
+                    // Give the service a moment to start
+                    delay(500)
+                    withContext(Dispatchers.Main) { updateTile() }
+                }
             }
         }
     }
@@ -44,14 +50,22 @@ class ProxyTileService : TileService() {
 
     private fun updateTile() {
         val tile = qsTile ?: return
-        val running = ProxyService.isRunning
-        tile.state = if (running) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        val serviceState = ProxyService.serviceState.value
+        tile.state = when (serviceState) {
+            ProxyServiceState.RUNNING -> Tile.STATE_ACTIVE
+            ProxyServiceState.STOPPED -> Tile.STATE_INACTIVE
+            ProxyServiceState.STARTING,
+            ProxyServiceState.RESTARTING,
+            ProxyServiceState.STOPPING -> Tile.STATE_UNAVAILABLE
+        }
         tile.label = getString(R.string.app_name)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = if (running) {
-                getString(R.string.tile_active)
-            } else {
-                getString(R.string.tile_inactive)
+            tile.subtitle = when (serviceState) {
+                ProxyServiceState.RUNNING -> getString(R.string.tile_active)
+                ProxyServiceState.STOPPED -> getString(R.string.tile_inactive)
+                ProxyServiceState.STARTING -> getString(R.string.proxy_starting)
+                ProxyServiceState.RESTARTING -> getString(R.string.proxy_restarting)
+                ProxyServiceState.STOPPING -> getString(R.string.proxy_stopping)
             }
         }
         tile.icon = Icon.createWithResource(this, R.drawable.ic_tile)

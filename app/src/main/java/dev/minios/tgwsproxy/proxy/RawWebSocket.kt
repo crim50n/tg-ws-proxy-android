@@ -5,6 +5,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
+import java.net.UnknownHostException
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.net.ssl.SSLContext
@@ -194,7 +195,11 @@ class RawWebSocket private constructor(
             for (domain in domains) {
                 try {
                     return connect(
-                        connectHost = connectTarget,
+                        connectHost = if (cfProxyDomain != null) {
+                            CfDnsResolver.cached(domain) ?: connectTarget
+                        } else {
+                            connectTarget
+                        },
                         domain = domain,
                         bufferSize = bufferSize,
                         connectTimeoutMs = connectTimeoutMs,
@@ -210,7 +215,23 @@ class RawWebSocket private constructor(
                     // For direct WS, stop on non-redirect handshake errors.
                     if (cfProxyDomain != null) continue else break
                 } catch (e: Exception) {
-                    lastError = e
+                    var connectionError = e
+                    if (cfProxyDomain != null && e is UnknownHostException) {
+                        val resolvedAddress = CfDnsResolver.resolve(domain)
+                        if (resolvedAddress != null) {
+                            try {
+                                return connect(
+                                    connectHost = resolvedAddress,
+                                    domain = domain,
+                                    bufferSize = bufferSize,
+                                    connectTimeoutMs = connectTimeoutMs,
+                                )
+                            } catch (fallbackError: Exception) {
+                                connectionError = fallbackError
+                            }
+                        }
+                    }
+                    lastError = connectionError
                     // Direct mode stops after connection errors; CF mode rotates.
                     // For direct WS, stop trying.
                     if (cfProxyDomain != null) continue else break

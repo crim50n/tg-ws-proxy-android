@@ -86,6 +86,14 @@ WebSocket observation prevents that automatic switch. Automatic decisions are
 not written to DataStore and do not overwrite manual settings. The effective
 route order is displayed on the main screen.
 
+Automatic mode also watches active direct WebSocket media sessions. If a media
+session sends requests without receiving data, the app closes the stalled
+connection and routes that datacenter's media retries through Cloudflare for one
+minute. A repeated stall after a direct retry extends the override to ten
+minutes. Other datacenters and regular Telegram sessions keep their current
+route. This per-session fallback resets on a proxy restart or network change and
+is disabled in manual mode.
+
 Automatic performance defaults are route-aware:
 
 - `WS -> Cloudflare -> TCP`: 256 KB socket buffer and direct WS pool size 4
