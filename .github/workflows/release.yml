@@ -91,7 +91,7 @@ jobs:
             exit 1
           fi
           cp "$APK" "release-apks/tg-ws-proxy-${VERSION}.apk"
-          sha256sum "release-apks/tg-ws-proxy-${VERSION}.apk" > "release-apks/tg-ws-proxy-${VERSION}.apk.sha256"
+          (cd release-apks && sha256sum "tg-ws-proxy-${VERSION}.apk" > "tg-ws-proxy-${VERSION}.apk.sha256")
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
