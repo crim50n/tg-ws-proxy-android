@@ -430,7 +430,8 @@ class ProxyService : Service() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "TgWsProxy::ProxyServer"
         ).apply {
-            acquire(10 * 60 * 60 * 1000L) // 10 hours max
+            setReferenceCounted(false)
+            acquire()
         }
     }
 
