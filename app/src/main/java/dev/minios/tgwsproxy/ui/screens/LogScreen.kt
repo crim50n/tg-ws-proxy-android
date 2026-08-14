@@ -136,18 +136,26 @@ private fun LazyListScrollbar(
     state: LazyListState,
     modifier: Modifier = Modifier,
 ) {
-    val layoutInfo = state.layoutInfo
-    val visibleItems = layoutInfo.visibleItemsInfo
-    val totalItems = layoutInfo.totalItemsCount
-    if (visibleItems.isEmpty() || visibleItems.size >= totalItems) return
+    val metrics by remember(state) {
+        derivedStateOf {
+            val layoutInfo = state.layoutInfo
+            Triple(
+                layoutInfo.visibleItemsInfo.size,
+                layoutInfo.totalItemsCount,
+                state.firstVisibleItemIndex,
+            )
+        }
+    }
+    val (visibleItems, totalItems, firstVisibleItemIndex) = metrics
+    if (visibleItems == 0 || visibleItems >= totalItems) return
 
     BoxWithConstraints(modifier = modifier.width(5.dp)) {
-        val visibleFraction = (visibleItems.size.toFloat() / totalItems).coerceIn(0f, 1f)
+        val visibleFraction = (visibleItems.toFloat() / totalItems).coerceIn(0f, 1f)
         val thumbHeight = (maxHeight * visibleFraction)
             .coerceAtLeast(32.dp)
             .coerceAtMost(maxHeight)
-        val maxFirstIndex = (totalItems - visibleItems.size).coerceAtLeast(1)
-        val scrollFraction = (state.firstVisibleItemIndex.toFloat() / maxFirstIndex).coerceIn(0f, 1f)
+        val maxFirstIndex = (totalItems - visibleItems).coerceAtLeast(1)
+        val scrollFraction = (firstVisibleItemIndex.toFloat() / maxFirstIndex).coerceIn(0f, 1f)
         val thumbOffset = (maxHeight - thumbHeight) * scrollFraction
 
         Box(

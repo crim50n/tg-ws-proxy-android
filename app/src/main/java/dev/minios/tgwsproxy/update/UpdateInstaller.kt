@@ -15,8 +15,7 @@ import java.security.MessageDigest
 object UpdateInstaller {
 
     fun canInstallPackages(context: Context): Boolean {
-        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
-                context.packageManager.canRequestPackageInstalls()
+        return context.packageManager.canRequestPackageInstalls()
     }
 
     fun openInstallPermission(context: Context) {

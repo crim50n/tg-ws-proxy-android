@@ -5,12 +5,14 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.runBlocking
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "tg_ws_proxy_config")
+private val SECRET_PATTERN = Regex("^[0-9a-fA-F]{32}$")
 
 /**
  * Persistent configuration storage using DataStore.
@@ -41,38 +43,35 @@ class ConfigRepository(private val context: Context) {
     }
 
     /**
-     * Stable initial secret: generated once and persisted immediately.
-     * This ensures MainScreen always sees a consistent secret.
+     * Ensure the initial proxy secret is valid and persisted without blocking the caller thread.
      */
-    private val stableSecret: String by lazy {
-        val existing = runBlocking {
-            context.dataStore.data.first()[Keys.SECRET]
-        }
-        if (existing?.matches(Regex("^[0-9a-fA-F]{32}$")) == true) {
-            existing
-        } else {
-            val generated = ProxyConfig.generateSecret()
-            runBlocking {
-                context.dataStore.edit { prefs ->
-                    val current = prefs[Keys.SECRET]
-                    if (current?.matches(Regex("^[0-9a-fA-F]{32}$")) != true) {
-                        prefs[Keys.SECRET] = generated
-                    }
-                }
+    private suspend fun ensureSecret(): String {
+        val existing = context.dataStore.data.first()[Keys.SECRET]
+        if (existing?.matches(SECRET_PATTERN) == true) return existing
+
+        var resolved = ""
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.SECRET]
+            resolved = if (current?.matches(SECRET_PATTERN) == true) {
+                current
+            } else {
+                ProxyConfig.generateSecret().also { prefs[Keys.SECRET] = it }
             }
-            generated
         }
+        return resolved
     }
 
     /**
      * Flow of the current config.
      */
-    val configFlow: Flow<ProxyConfig> = context.dataStore.data.map { prefs ->
+    val configFlow: Flow<ProxyConfig> = flow {
+        val stableSecret = ensureSecret()
+        emitAll(context.dataStore.data.map { prefs ->
         ProxyConfig(
             host = prefs[Keys.HOST] ?: "127.0.0.1",
             port = (prefs[Keys.PORT] ?: 1443).coerceIn(1, 65535),
             secret = prefs[Keys.SECRET]
-                ?.takeIf { it.matches(Regex("^[0-9a-fA-F]{32}$")) }
+                ?.takeIf { it.matches(SECRET_PATTERN) }
                 ?: stableSecret,
             dcRedirects = prefs[Keys.DC_REDIRECTS]?.let { deserializeDcRedirects(it) }
                 ?: ProxyConfig().dcRedirects,
@@ -97,6 +96,7 @@ class ConfigRepository(private val context: Context) {
             appTheme = prefs[Keys.APP_THEME]?.takeIf { it in setOf("system", "light", "dark") } ?: "system",
             dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true,
         )
+        })
     }
 
     /**

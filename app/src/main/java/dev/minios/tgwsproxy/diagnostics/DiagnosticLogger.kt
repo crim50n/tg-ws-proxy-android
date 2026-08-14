@@ -122,7 +122,7 @@ object DiagnosticLogger {
                 loadEntries(applicationContext)
             }
         }.onFailure { Log.w(TAG, "Unable to restore diagnostic history", it) }
-        writer.scheduleAtFixedRate(
+        writer.scheduleWithFixedDelay(
             {
                 runCatching {
                     synchronized(fileLock) {

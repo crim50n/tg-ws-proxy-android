@@ -9,21 +9,18 @@
     <string name="btn_start">Подключить</string>
     <string name="btn_stop">Остановить</string>
     <string name="btn_stopping">Остановка…</string>
-    <string name="btn_restart">Перезапустить</string>
     <string name="open_in_telegram">Открыть в Telegram</string>
     <string name="copy_link">Скопировать ссылку</string>
     <string name="proxy_link">Ссылка прокси</string>
     <string name="link_copied">Ссылка скопирована</string>
     <string name="secret_copied">Секрет скопирован</string>
     <string name="settings">Настройки</string>
-    <string name="close">Закрыть</string>
     <string name="cancel">Отмена</string>
     <string name="port_in_use_title">Не удалось запустить прокси</string>
     <string name="port_in_use_message">Локальный порт %1$d уже занят. Остановите использующее его приложение или выберите другой порт.</string>
     <string name="port_in_use_open_settings">Изменить порт</string>
 
     <!-- Stats -->
-    <string name="stats_traffic">Трафик</string>
     <string name="stats_connections">Соединения</string>
     <string name="stats_total">Всего</string>
     <string name="stats_active">Активных</string>
@@ -166,7 +163,6 @@
 
     <!-- Event log -->
     <string name="log_title">Журнал диагностики</string>
-    <string name="log_not_recording">События в реальном времени</string>
     <string name="log_empty">Событий подключений пока нет</string>
     <string name="connection_advice_title">Рекомендация для этой сети</string>
     <string name="connection_advice_enable_cf">Прямые соединения в этой сети постоянно завершаются по тайм-ауту. Рекомендуется включить Cloudflare.</string>

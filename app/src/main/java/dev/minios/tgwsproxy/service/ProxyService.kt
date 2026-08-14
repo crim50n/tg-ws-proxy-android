@@ -1,5 +1,6 @@
 package dev.minios.tgwsproxy.service
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -423,6 +424,7 @@ class ProxyService : Service() {
         super.onDestroy()
     }
 
+    @SuppressLint("WakelockTimeout")
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager

@@ -54,8 +54,6 @@ object CfProxyDomains {
     // Background refresh thread lifecycle.
     @Volatile
     private var refreshThread: Thread? = null
-    @Volatile
-    private var stopFlag = false
 
     /**
      * Decode domain using the same algorithm as Python _dd().
@@ -103,38 +101,38 @@ object CfProxyDomains {
      * Refreshes immediately on start, then every hour.
      * Calling again stops the previous thread and starts a new one.
      */
+    @Synchronized
     fun startBackgroundRefresh() {
-        // Stop existing thread (matching Python: _refresh_stop.set())
-        stopFlag = true
-        refreshThread?.interrupt()
+        val previous = refreshThread
+        refreshThread = null
+        previous?.interrupt()
 
-        stopFlag = false
         val thread = Thread({
-            // Refresh immediately on startup (matching Python _loop)
+            // Refresh immediately on startup (matching Python _loop).
             doRefresh()
-            // Then loop every hour
-            while (!stopFlag) {
+            while (refreshThread === Thread.currentThread()) {
                 try {
                     Thread.sleep(REFRESH_INTERVAL_MS)
                 } catch (_: InterruptedException) {
                     break
                 }
-                if (stopFlag) break
+                if (refreshThread !== Thread.currentThread()) break
                 doRefresh()
             }
         }, "cfproxy-domains-refresh")
         thread.isDaemon = true
-        thread.start()
         refreshThread = thread
+        thread.start()
     }
 
     /**
      * Stop the background refresh thread.
      */
+    @Synchronized
     fun stopBackgroundRefresh() {
-        stopFlag = true
-        refreshThread?.interrupt()
+        val thread = refreshThread
         refreshThread = null
+        thread?.interrupt()
     }
 
     /**

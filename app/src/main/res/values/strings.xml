@@ -11,21 +11,18 @@
     <string name="btn_start">Connect</string>
     <string name="btn_stop">Stop</string>
     <string name="btn_stopping">Stopping…</string>
-    <string name="btn_restart">Restart</string>
     <string name="open_in_telegram">Open in Telegram</string>
     <string name="copy_link">Copy link</string>
     <string name="proxy_link">Proxy link</string>
     <string name="link_copied">Link copied</string>
     <string name="secret_copied">Secret copied</string>
     <string name="settings">Settings</string>
-    <string name="close">Close</string>
     <string name="cancel">Cancel</string>
     <string name="port_in_use_title">Proxy could not start</string>
     <string name="port_in_use_message">Local port %1$d is already in use. Stop the other app using it or select another port.</string>
     <string name="port_in_use_open_settings">Change port</string>
 
     <!-- Stats -->
-    <string name="stats_traffic">Traffic</string>
     <string name="stats_connections">Connections</string>
     <string name="stats_total">Total</string>
     <string name="stats_active">Active</string>
@@ -167,11 +164,9 @@
     <string name="update_install_permission_required">Allow TG WS Proxy to install unknown apps, then tap Update again</string>
     <string name="update_install_permission_failed">Unable to open the install permission settings</string>
     <string name="dc_ip_label" translatable="false">DC:IP</string>
-    <string name="github" translatable="false">GitHub</string>
 
     <!-- Event log -->
     <string name="log_title">Diagnostic log</string>
-    <string name="log_not_recording">Live events</string>
     <string name="log_empty">No connection events yet</string>
     <string name="connection_advice_title">Network recommendation</string>
     <string name="connection_advice_enable_cf">Direct connections repeatedly time out on this network. Cloudflare is recommended.</string>
