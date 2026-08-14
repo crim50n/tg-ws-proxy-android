@@ -45,7 +45,12 @@ jobs:
           test -n "$KEYSTORE_ALIAS" || { echo "::error::KEYSTORE_ALIAS is not configured"; exit 1; }
           test -n "$KEYSTORE_PASSWORD" || { echo "::error::KEYSTORE_PASSWORD is not configured"; exit 1; }
 
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "v${{ steps.version.outputs.name }}" ]; then
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "::error::Release publication must run from an existing version tag"
+            exit 1
+          fi
+
+          if [ "$GITHUB_REF_NAME" != "v${{ steps.version.outputs.name }}" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match version v${{ steps.version.outputs.name }}"
             exit 1
           fi
@@ -108,17 +113,19 @@ jobs:
           TAG="v${VERSION}"
 
           if gh release view $TAG > /dev/null 2>&1; then
-            echo "Release $TAG already exists, uploading APK..."
-            gh release upload $TAG release-apks/* --clobber
+            echo "::error::Release $TAG already exists; published release assets are immutable"
+            exit 1
           else
             echo "Creating new release $TAG..."
             if [ -f "RELEASE_NOTES_${VERSION}.md" ]; then
               gh release create $TAG \
+                --verify-tag \
                 --title "${VERSION}" \
                 --notes-file "RELEASE_NOTES_${VERSION}.md" \
                 release-apks/*
             else
               gh release create $TAG \
+                --verify-tag \
                 --title "${VERSION}" \
                 --generate-notes \
                 release-apks/*

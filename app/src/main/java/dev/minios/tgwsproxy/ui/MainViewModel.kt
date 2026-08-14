@@ -12,6 +12,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import dev.minios.tgwsproxy.BuildConfig
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.data.ConfigRepository
@@ -64,6 +66,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var statsJob: Job? = null
     private var settingsStartConfig: ProxyConfig? = null
+    private val diagnosticActionMutex = Mutex()
 
     init {
         DiagnosticLogger.initialize(application)
@@ -216,25 +219,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun clearDiagnostics() = DiagnosticLogger.clear()
+    fun clearDiagnostics() {
+        viewModelScope.launch {
+            diagnosticActionMutex.withLock {
+                withContext(Dispatchers.IO) { DiagnosticLogger.clear() }
+            }
+        }
+    }
 
     fun exportDiagnostics() {
-        val ctx = getApplication<Application>()
-        val file = DiagnosticLogger.createExportFile() ?: return
-        try {
-            val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
-            val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_STREAM, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        viewModelScope.launch {
+            diagnosticActionMutex.withLock {
+                val ctx = getApplication<Application>()
+                val file = withContext(Dispatchers.IO) { DiagnosticLogger.createExportFile() }
+                if (file == null) {
+                    _toastMessage.tryEmit(ctx.getString(R.string.diagnostics_export_failed))
+                    return@withLock
+                }
+                try {
+                    val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", file)
+                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    ctx.startActivity(
+                        Intent.createChooser(shareIntent, ctx.getString(R.string.diagnostics_export)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        },
+                    )
+                } catch (_: Exception) {
+                    _toastMessage.tryEmit(ctx.getString(R.string.diagnostics_export_failed))
+                }
             }
-            ctx.startActivity(
-                Intent.createChooser(shareIntent, ctx.getString(R.string.diagnostics_export)).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                },
-            )
-        } catch (_: Exception) {
-            _toastMessage.tryEmit(ctx.getString(R.string.diagnostics_export_failed))
         }
     }
 

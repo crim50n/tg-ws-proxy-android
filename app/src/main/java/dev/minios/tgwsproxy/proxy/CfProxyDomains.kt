@@ -3,9 +3,11 @@ package dev.minios.tgwsproxy.proxy
 import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Call
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Cloudflare proxy domain management.
@@ -54,6 +56,13 @@ object CfProxyDomains {
     // Background refresh thread lifecycle.
     @Volatile
     private var refreshThread: Thread? = null
+    @Volatile
+    private var activeCall: Call? = null
+    private val refreshGeneration = AtomicLong(0L)
+    private val refreshClient = OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
+        .build()
 
     /**
      * Decode domain using the same algorithm as Python _dd().
@@ -105,11 +114,14 @@ object CfProxyDomains {
     fun startBackgroundRefresh() {
         val previous = refreshThread
         refreshThread = null
+        val generation = refreshGeneration.incrementAndGet()
+        activeCall?.cancel()
+        activeCall = null
         previous?.interrupt()
 
         val thread = Thread({
             // Refresh immediately on startup (matching Python _loop).
-            doRefresh()
+            doRefresh(generation)
             while (refreshThread === Thread.currentThread()) {
                 try {
                     Thread.sleep(REFRESH_INTERVAL_MS)
@@ -117,7 +129,7 @@ object CfProxyDomains {
                     break
                 }
                 if (refreshThread !== Thread.currentThread()) break
-                doRefresh()
+                doRefresh(generation)
             }
         }, "cfproxy-domains-refresh")
         thread.isDaemon = true
@@ -132,33 +144,31 @@ object CfProxyDomains {
     fun stopBackgroundRefresh() {
         val thread = refreshThread
         refreshThread = null
+        refreshGeneration.incrementAndGet()
+        activeCall?.cancel()
+        activeCall = null
         thread?.interrupt()
-    }
-
-    /**
-     * On-demand refresh (kept for backward compatibility).
-     */
-    fun refreshIfNeeded() {
-        doRefresh()
     }
 
     /**
      * Actual refresh logic (matching Python refresh_cfproxy_domains).
      */
-    private fun doRefresh() {
+    private fun doRefresh(generation: Long) {
+        var call: Call? = null
         try {
             val cacheBuster = (1..7).map { ('a'..'z').random() }.joinToString("")
-            val client = OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(10, TimeUnit.SECONDS)
-                .build()
-
             val request = Request.Builder()
                 .url("$DOMAINS_URL?$cacheBuster")
                 .header("User-Agent", "tg-ws-proxy")
                 .build()
 
-            client.newCall(request).execute().use { response ->
+            val requestCall = refreshClient.newCall(request)
+            call = requestCall
+            synchronized(this) {
+                if (generation != refreshGeneration.get()) return
+                activeCall = call
+            }
+            requestCall.execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: return
                     val encoded = body.lines()
@@ -169,16 +179,31 @@ object CfProxyDomains {
                     val decoded = normalizeDomains(encoded.map { decodeDomain(it) })
 
                     if (decoded.size >= MIN_VALID_DOMAINS) {
-                        domains.set(decoded)
-                        activeDomains.entries.removeIf { it.value !in decoded }
-                        Log.i(TAG, "CF proxy domain pool updated from GitHub (${decoded.size} domains)")
+                        val applied = synchronized(this) {
+                            if (generation != refreshGeneration.get()) {
+                                false
+                            } else {
+                                domains.set(decoded)
+                                activeDomains.entries.removeIf { it.value !in decoded }
+                                true
+                            }
+                        }
+                        if (applied) {
+                            Log.i(TAG, "CF proxy domain pool updated from GitHub (${decoded.size} domains)")
+                        }
                     } else {
                         Log.w(TAG, "Ignoring CF proxy domain update: ${decoded.size} valid domain(s)")
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to refresh CF proxy domains: ${e.message}")
+            if (generation == refreshGeneration.get()) {
+                Log.w(TAG, "Failed to refresh CF proxy domains: ${e.message}")
+            }
+        } finally {
+            synchronized(this) {
+                if (activeCall === call) activeCall = null
+            }
         }
     }
 

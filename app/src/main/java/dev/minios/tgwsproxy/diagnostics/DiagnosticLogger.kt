@@ -15,6 +15,7 @@ import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 enum class DiagnosticLevel { DEBUG, INFO, WARN, ERROR, FATAL }
 
@@ -35,7 +36,7 @@ internal fun parseDiagnosticLine(line: String): DiagnosticEntry? {
     val parts = line.split('\t', limit = 3)
     if (parts.size < 2 || parts[0].isBlank() || parts[1].isBlank()) return null
     val hasLevel = parts.size == 3 && runCatching { DiagnosticLevel.valueOf(parts[1]) }.isSuccess
-    val safeEvent = DiagnosticRedactor.redact(if (hasLevel) parts[2] else parts[1])
+    val safeEvent = DiagnosticRedactor.redactPersisted(if (hasLevel) parts[2] else parts[1])
     return DiagnosticEntry(
         timestamp = parts[0],
         level = if (hasLevel) DiagnosticLevel.valueOf(parts[1]) else DiagnosticLevel.INFO,
@@ -50,7 +51,10 @@ object DiagnosticRedactor {
     private val secretHex = Regex("(?i)\\b(?:dd)?[0-9a-f]{32}\\b")
     private val ipv4Address = Regex("(?<![0-9])(?:[0-9]{1,3}\\.){3}[0-9]{1,3}(?![0-9])")
     private val ipv6Address = Regex("(?i)(?<![0-9a-f])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-f])")
+    private val hostname = Regex("(?i)\\b(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}\\b")
+    private val persistedHostField = Regex("(?i)(\\b(?:host|hostname|domain)=)[^\\s]+")
     private val forbiddenKeys = setOf("secret", "link", "payload", "header", "data")
+    private val privateHostKeys = setOf("host", "hostname", "domain")
 
     fun redact(value: String, maxLength: Int = 500): String {
         return value
@@ -64,10 +68,34 @@ object DiagnosticRedactor {
             .take(maxLength)
     }
 
+    fun redactPersisted(value: String): String {
+        val redacted = redact(value, maxLength = 5_000).replace(persistedHostField, "$1[redacted]")
+        val messageStart = redacted.indexOf("message=", ignoreCase = true)
+        if (messageStart < 0) return redacted
+        val messageEnd = redacted.indexOf(" stack=", startIndex = messageStart, ignoreCase = true)
+            .takeIf { it >= 0 }
+            ?: redacted.length
+        return buildString(redacted.length) {
+            append(redacted, 0, messageStart)
+            append(
+                redacted.substring(messageStart, messageEnd)
+                    .replace(hostname, "[host-redacted]"),
+            )
+            append(redacted, messageEnd, redacted.length)
+        }
+    }
+
     fun field(key: String, value: Any?): String {
-        if (forbiddenKeys.any { key.contains(it, ignoreCase = true) }) return "[redacted]"
+        if (forbiddenKeys.any { key.contains(it, ignoreCase = true) } ||
+            key.lowercase() in privateHostKeys
+        ) return "[redacted]"
         val maxLength = if (key.equals("stack", ignoreCase = true)) 4_000 else 500
-        return redact(value?.toString() ?: "null", maxLength)
+        val redacted = redact(value?.toString() ?: "null", maxLength)
+        return if (key.equals("message", ignoreCase = true)) {
+            redacted.replace(hostname, "[host-redacted]")
+        } else {
+            redacted
+        }
     }
 }
 
@@ -85,6 +113,7 @@ object DiagnosticLogger {
     private const val MAX_BATCH_ENTRIES = 50
     private const val BATCH_DELAY_MS = 150L
     private const val RETENTION_CHECK_INTERVAL_HOURS = 24L
+    private const val EXPORT_RETENTION_MS = 24 * 60 * 60_000L
     private const val TAG = "DiagnosticLogger"
 
     private val fileLock = Any()
@@ -94,6 +123,8 @@ object DiagnosticLogger {
     private val operationLock = Any()
     private val pendingLines = ArrayDeque<String>()
     private val initialized = AtomicBoolean(false)
+    private val droppedEntries = AtomicLong(0L)
+    private val exportSequence = AtomicLong(0L)
     private var writerScheduled = false
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US)
     private val writer = Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -114,20 +145,25 @@ object DiagnosticLogger {
         val applicationContext = context.applicationContext
         appContext = applicationContext
         if (!initialized.compareAndSet(false, true)) return
-        runCatching {
-            synchronized(fileLock) {
-                clearLegacyRecordingState(applicationContext)
-                deleteExpiredFiles(applicationContext)
-                refreshState(applicationContext)
-                loadEntries(applicationContext)
-            }
-        }.onFailure { Log.w(TAG, "Unable to restore diagnostic history", it) }
+        writer.execute {
+            runCatching {
+                synchronized(fileLock) {
+                    clearLegacyRecordingState(applicationContext)
+                    pruneExpiredEntries(applicationContext)
+                    cleanupExpiredExports(applicationContext)
+                    refreshState(applicationContext)
+                    loadEntries(applicationContext)
+                }
+            }.onFailure { Log.w(TAG, "Unable to restore diagnostic history", it) }
+        }
         writer.scheduleWithFixedDelay(
             {
                 runCatching {
                     synchronized(fileLock) {
-                        deleteExpiredFiles(applicationContext)
+                        val cutoff = pruneExpiredEntries(applicationContext)
+                        cleanupExpiredExports(applicationContext)
                         refreshState(applicationContext)
+                        removeExpiredLiveEntries(cutoff)
                     }
                 }.onFailure { Log.w(TAG, "Unable to enforce diagnostic retention", it) }
             },
@@ -183,10 +219,10 @@ object DiagnosticLogger {
                 synchronized(fileLock) {
                     currentFile(context).delete()
                     previousFile(context).delete()
-                    exportFile(context).delete()
                     refreshState(context)
                 }
             }
+            droppedEntries.set(0L)
             synchronized(liveLock) { _entries.value = emptyList() }
         }
     }
@@ -197,35 +233,41 @@ object DiagnosticLogger {
 
     fun createExportFile(): File? {
         val context = appContext ?: return null
-        return runOnWriter {
-            synchronized(fileLock) {
-                deleteExpiredFiles(context)
-                val files = listOf(previousFile(context), currentFile(context))
-                    .filter { it.isFile && it.length() > 0 }
-                if (files.isEmpty()) return@runOnWriter null
-                val output = exportFile(context)
-                output.parentFile?.mkdirs()
-                output.bufferedWriter(Charsets.UTF_8).use { export ->
-                    export.appendLine("TG WS Proxy diagnostics")
-                    export.appendLine("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-                    export.appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
-                    export.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
-                    export.appendLine("Exported: ${formatTimestamp()}")
-                    export.appendLine("Logging: always on, INFO and above plus selected transport events")
-                    export.appendLine("Sensitive proxy links, secrets, and IP addresses are redacted.")
-                    export.appendLine()
-                    files.forEach { file ->
-                        file.forEachLine(Charsets.UTF_8) { line ->
-                            parseDiagnosticLine(line)?.let { entry ->
-                                val details = entry.details.takeIf(String::isNotEmpty)?.let { " $it" }.orEmpty()
-                                export.appendLine(
-                                    "${entry.timestamp}\t${entry.level}\t${entry.event}$details",
-                                )
+        return synchronized(operationLock) {
+            runOnWriter {
+                synchronized(fileLock) {
+                    val cutoff = pruneExpiredEntries(context)
+                    cleanupExpiredExports(context)
+                    refreshState(context)
+                    removeExpiredLiveEntries(cutoff)
+                    val files = listOf(previousFile(context), currentFile(context))
+                        .filter { it.isFile && it.length() > 0 }
+                    if (files.isEmpty()) return@runOnWriter null
+                    val output = newExportFile(context)
+                    output.parentFile?.mkdirs()
+                    output.bufferedWriter(Charsets.UTF_8).use { export ->
+                        export.appendLine("TG WS Proxy diagnostics")
+                        export.appendLine("App: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+                        export.appendLine("Android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+                        export.appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL}")
+                        export.appendLine("Exported: ${formatTimestamp()}")
+                        export.appendLine("Logging: always on, INFO and above plus selected transport events")
+                        export.appendLine("Dropped before persistence: ${droppedEntries.get()}")
+                        export.appendLine("Sensitive proxy links, secrets, hostnames, and IP addresses are redacted.")
+                        export.appendLine()
+                        files.forEach { file ->
+                            file.forEachLine(Charsets.UTF_8) { line ->
+                                parseDiagnosticLine(line)?.let { entry ->
+                                    val details = entry.details.takeIf(String::isNotEmpty)?.let { " $it" }.orEmpty()
+                                    export.appendLine(
+                                        "${entry.timestamp}\t${entry.level}\t${entry.event}$details",
+                                    )
+                                }
                             }
                         }
                     }
+                    output
                 }
-                output
             }
         }
     }
@@ -257,7 +299,10 @@ object DiagnosticLogger {
 
     private fun enqueue(line: String) {
         synchronized(queueLock) {
-            if (pendingLines.size >= MAX_PENDING_ENTRIES) pendingLines.removeFirst()
+            if (pendingLines.size >= MAX_PENDING_ENTRIES) {
+                pendingLines.removeFirst()
+                droppedEntries.incrementAndGet()
+            }
             pendingLines.addLast(line)
             if (writerScheduled) return
             writerScheduled = true
@@ -280,7 +325,10 @@ object DiagnosticLogger {
                 }
             }
             runCatching { persistBatch(batch) }
-                .onFailure { Log.e(TAG, "Unable to persist diagnostic batch", it) }
+                .onFailure {
+                    droppedEntries.addAndGet(batch.size.toLong())
+                    Log.e(TAG, "Unable to persist diagnostic batch", it)
+                }
         }
     }
 
@@ -302,9 +350,30 @@ object DiagnosticLogger {
         if (!current.renameTo(previousFile(context))) current.delete()
     }
 
-    private fun deleteExpiredFiles(context: Context) {
+    private fun pruneExpiredEntries(context: Context): Long {
         val cutoff = System.currentTimeMillis() - RETENTION_MS
-        listOf(currentFile(context), previousFile(context), exportFile(context)).forEach { file ->
+        listOf(currentFile(context), previousFile(context)).forEach { file ->
+            if (!file.isFile) return@forEach
+            val lines = file.readLines(Charsets.UTF_8)
+            val retained = lines.filter { line -> isLineWithinRetention(line, cutoff) }
+            when {
+                retained.isEmpty() -> file.delete()
+                retained.size != lines.size -> file.writeText(
+                    retained.joinToString(separator = "\n", postfix = "\n"),
+                    Charsets.UTF_8,
+                )
+            }
+        }
+        return cutoff
+    }
+
+    internal fun isLineWithinRetention(line: String, cutoff: Long): Boolean {
+        return parseTimestamp(line.substringBefore('\t'))?.time?.let { it >= cutoff } == true
+    }
+
+    private fun cleanupExpiredExports(context: Context) {
+        val cutoff = System.currentTimeMillis() - EXPORT_RETENTION_MS
+        exportDirectory(context).listFiles()?.forEach { file ->
             if (file.isFile && file.lastModified() < cutoff) file.delete()
         }
     }
@@ -324,13 +393,28 @@ object DiagnosticLogger {
     }
 
     private fun loadEntries(context: Context) {
+        val restored = listOf(previousFile(context), currentFile(context))
+            .filter(File::isFile)
+            .flatMap { it.readLines(Charsets.UTF_8) }
+            .takeLast(MAX_LIVE_ENTRIES)
+            .mapNotNull(::parseDiagnosticLine)
         synchronized(liveLock) {
-            _entries.value = listOf(previousFile(context), currentFile(context))
-                .filter(File::isFile)
-                .flatMap { it.readLines(Charsets.UTF_8) }
+            _entries.value = (restored + _entries.value)
+                .distinctBy { "${it.timestamp}\t${it.level}\t${it.event}\t${it.details}" }
                 .takeLast(MAX_LIVE_ENTRIES)
-                .mapNotNull(::parseDiagnosticLine)
         }
+    }
+
+    private fun removeExpiredLiveEntries(cutoff: Long) {
+        synchronized(liveLock) {
+            _entries.value = _entries.value.filter { entry ->
+                parseTimestamp(entry.timestamp)?.time?.let { it >= cutoff } == true
+            }
+        }
+    }
+
+    private fun parseTimestamp(value: String): Date? = synchronized(timestampLock) {
+        runCatching { timestampFormat.parse(value) }.getOrNull()
     }
 
     private fun formatTimestamp(): String = synchronized(timestampLock) {
@@ -344,6 +428,9 @@ object DiagnosticLogger {
     private fun logDirectory(context: Context) = File(context.filesDir, LOG_DIR)
     private fun currentFile(context: Context) = File(logDirectory(context), CURRENT_LOG)
     private fun previousFile(context: Context) = File(logDirectory(context), PREVIOUS_LOG)
-    private fun exportFile(context: Context) =
-        File(File(context.cacheDir, LOG_DIR), "tg-ws-proxy-diagnostics.txt")
+    private fun exportDirectory(context: Context) = File(context.cacheDir, LOG_DIR)
+    private fun newExportFile(context: Context) = File(
+        exportDirectory(context),
+        "tg-ws-proxy-diagnostics-${System.currentTimeMillis()}-${exportSequence.incrementAndGet()}.txt",
+    )
 }
