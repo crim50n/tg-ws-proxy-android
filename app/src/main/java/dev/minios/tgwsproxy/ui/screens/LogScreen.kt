@@ -1,10 +1,5 @@
 package dev.minios.tgwsproxy.ui.screens
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,13 +11,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FileUpload
-import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -39,17 +31,13 @@ import dev.minios.tgwsproxy.ui.theme.StatusRed
 fun LogScreen(
     entries: List<DiagnosticEntry>,
     diagnosticState: DiagnosticState,
-    onStartDiagnostics: () -> Unit,
-    onStopDiagnostics: () -> Unit,
     onExportDiagnostics: () -> Unit,
     onClearDiagnostics: () -> Unit,
     onBack: () -> Unit,
 ) {
     val listState = rememberLazyListState()
-    var recordingDialogVisible by rememberSaveable { mutableStateOf(false) }
-    var initialScrollCompleted by rememberSaveable { mutableStateOf(false) }
-    var followTail by rememberSaveable { mutableStateOf(true) }
-    val recordingAlpha = recordingIndicatorAlpha(diagnosticState.isRecording)
+    var initialScrollCompleted by remember { mutableStateOf(false) }
+    var followTail by remember { mutableStateOf(true) }
     LaunchedEffect(entries.size) {
         if (entries.isEmpty()) return@LaunchedEffect
         if (!initialScrollCompleted || followTail) {
@@ -63,15 +51,6 @@ fun LogScreen(
                 followTail = !listState.canScrollForward
             }
         }
-    }
-
-    if (recordingDialogVisible) {
-        DiagnosticControlDialog(
-            diagnosticState = diagnosticState,
-            onStart = onStartDiagnostics,
-            onStop = onStopDiagnostics,
-            onDismiss = { recordingDialogVisible = false },
-        )
     }
 
     Scaffold(
@@ -88,14 +67,6 @@ fun LogScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { recordingDialogVisible = true }) {
-                        Icon(
-                            Icons.Default.FiberManualRecord,
-                            contentDescription = stringResource(R.string.diagnostics_controls),
-                            modifier = Modifier.alpha(recordingAlpha),
-                            tint = if (diagnosticState.isRecording) StatusRed else LocalContentColor.current,
-                        )
-                    }
                     IconButton(onClick = onExportDiagnostics, enabled = diagnosticState.hasLog) {
                         Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.diagnostics_export))
                     }
@@ -118,6 +89,12 @@ fun LogScreen(
                 .padding(paddingValues)
                 .padding(16.dp),
         ) {
+            Text(
+                text = stringResource(R.string.diagnostics_always_on_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
             if (entries.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
@@ -155,98 +132,6 @@ fun LogScreen(
 }
 
 @Composable
-private fun DiagnosticControlDialog(
-    diagnosticState: DiagnosticState,
-    onStart: () -> Unit,
-    onStop: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val recordingAlpha = recordingIndicatorAlpha(diagnosticState.isRecording)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .alpha(recordingAlpha),
-                    shape = RoundedCornerShape(5.dp),
-                    color = if (diagnosticState.isRecording) StatusRed else MaterialTheme.colorScheme.primary,
-                ) {}
-                Spacer(modifier = Modifier.width(10.dp))
-                Text(
-                    text = stringResource(
-                        if (diagnosticState.isRecording) {
-                            R.string.diagnostics_active_title
-                        } else {
-                            R.string.diagnostics_report_title
-                        },
-                    ),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-        },
-        text = {
-            Column {
-                Text(
-                    text = if (diagnosticState.isRecording) {
-                        stringResource(R.string.diagnostics_active_instructions)
-                    } else {
-                        stringResource(R.string.diagnostics_start_instructions)
-                    },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(12.dp))
-                Text(
-                    text = stringResource(R.string.diagnostics_report_note),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = if (diagnosticState.isRecording) onStop else onStart) {
-                Text(
-                    stringResource(
-                        if (diagnosticState.isRecording) R.string.diagnostics_stop else R.string.diagnostics_start,
-                    ),
-                )
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(
-                    stringResource(
-                        if (diagnosticState.isRecording) {
-                            R.string.diagnostics_continue_background
-                        } else {
-                            R.string.cancel
-                        },
-                    ),
-                )
-            }
-        },
-    )
-}
-
-@Composable
-internal fun recordingIndicatorAlpha(isRecording: Boolean): Float {
-    if (!isRecording) return 1f
-    val transition = rememberInfiniteTransition(label = "diagnostic recording")
-    return transition.animateFloat(
-        initialValue = 1f,
-        targetValue = 0.2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 650),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "recording indicator alpha",
-    ).value
-}
-
-@Composable
 private fun LazyListScrollbar(
     state: LazyListState,
     modifier: Modifier = Modifier,
@@ -280,6 +165,7 @@ private fun LazyListScrollbar(
 @Composable
 private fun LogEntryRow(entry: DiagnosticEntry) {
     val eventColor = when {
+        entry.level >= dev.minios.tgwsproxy.diagnostics.DiagnosticLevel.ERROR -> MaterialTheme.colorScheme.error
         entry.event.contains("failed", ignoreCase = true) ||
                 entry.event.contains("rejected", ignoreCase = true) -> MaterialTheme.colorScheme.error
         entry.event.contains("ready", ignoreCase = true) ||
@@ -304,6 +190,13 @@ private fun LogEntryRow(entry: DiagnosticEntry) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = entry.level.name,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = eventColor,
+                )
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = entry.event,
                     style = MaterialTheme.typography.labelMedium,

@@ -110,7 +110,6 @@ fun AboutScreen(
                         text = stringResource(
                             R.string.about_version,
                             BuildConfig.VERSION_NAME,
-                            BuildConfig.VERSION_CODE,
                         ),
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                         style = MaterialTheme.typography.labelLarge,

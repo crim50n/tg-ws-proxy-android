@@ -298,5 +298,5 @@ class ConnectionAdvisorTest {
         entry("upstream_route_ready", "dc=$dc route=$route source=probe runtimeId=$runtimeId")
 
     private fun entry(event: String, details: String) =
-        DiagnosticEntry("2026-07-15T12:00:00.000+0300", event, details)
+        DiagnosticEntry("2026-07-15T12:00:00.000+0300", DiagnosticLevel.INFO, event, details)
 }

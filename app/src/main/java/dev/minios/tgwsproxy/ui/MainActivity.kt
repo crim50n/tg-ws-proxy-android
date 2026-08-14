@@ -115,7 +115,6 @@ private fun AppNavigation(viewModel: MainViewModel) {
                 stats = stats,
                 connectionAdvice = connectionAdvice,
                 updateState = updateState,
-                diagnosticRecording = diagnosticState.isRecording,
                 onStart = { viewModel.startProxy() },
                 onStop = { viewModel.stopProxy() },
                 onOpenInTelegram = { viewModel.openInTelegram() },
@@ -159,8 +158,6 @@ private fun AppNavigation(viewModel: MainViewModel) {
             LogScreen(
                 entries = diagnosticEntries,
                 diagnosticState = diagnosticState,
-                onStartDiagnostics = { viewModel.startDiagnostics() },
-                onStopDiagnostics = { viewModel.stopDiagnostics() },
                 onExportDiagnostics = { viewModel.exportDiagnostics() },
                 onClearDiagnostics = { viewModel.clearDiagnostics() },
                 onBack = { currentScreen = Screen.Settings },

@@ -44,4 +44,29 @@ class DiagnosticRedactorTest {
         assertTrue(entry?.event == "upstream_route_ready")
         assertFalse(entry?.details.orEmpty().contains("149.154.167.220"))
     }
+
+    @Test
+    fun parsesLeveledEntryAndKeepsLegacyEntriesCompatible() {
+        val error = parseDiagnosticLine(
+            "2026-07-14T22:42:42.128+0300\tERROR\truntime_failed reason=timeout",
+        )
+        val legacy = parseDiagnosticLine(
+            "2026-07-14T22:42:42.128+0300\tlistener_ready port=1443",
+        )
+
+        assertTrue(error?.level == DiagnosticLevel.ERROR)
+        assertTrue(error?.event == "runtime_failed")
+        assertTrue(legacy?.level == DiagnosticLevel.INFO)
+        assertTrue(legacy?.event == "listener_ready")
+    }
+    @Test
+    fun keepsLongerCrashStackWhileStillRedactingSensitiveData() {
+        val value = ("at example.Frame.method(Frame.kt:123) | ".repeat(30)) + "149.154.167.220"
+        val result = DiagnosticRedactor.field("stack", value)
+
+        assertTrue(result.length > 500)
+        assertFalse(result.contains("149.154.167.220"))
+        assertTrue(result.contains("[ip-redacted]"))
+    }
+
 }

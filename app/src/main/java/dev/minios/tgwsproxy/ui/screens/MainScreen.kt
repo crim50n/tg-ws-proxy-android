@@ -14,7 +14,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -43,7 +42,6 @@ fun MainScreen(
     stats: StatsSnapshot,
     connectionAdvice: ConnectionAdvice?,
     updateState: UpdateState,
-    diagnosticRecording: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpenInTelegram: () -> Unit,
@@ -137,7 +135,6 @@ fun MainScreen(
                 config = config,
                 uptimeSeconds = stats.uptimeSeconds,
                 runtimeRouteMode = runtimeRouteMode,
-                diagnosticRecording = diagnosticRecording,
             )
 
             AnimatedVisibility(
@@ -380,7 +377,6 @@ private fun StatusCard(
     config: ProxyConfig,
     uptimeSeconds: Long,
     runtimeRouteMode: RuntimeRouteMode?,
-    diagnosticRecording: Boolean,
 ) {
     val isRunning = serviceState == ProxyServiceState.RUNNING
     val isTransitioning = serviceState == ProxyServiceState.STARTING ||
@@ -443,26 +439,6 @@ private fun StatusCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                }
-                if (diagnosticRecording) {
-                    val recordingAlpha = recordingIndicatorAlpha(isRecording = true)
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(
-                            modifier = Modifier
-                                .size(9.dp)
-                                .alpha(recordingAlpha),
-                            shape = CircleShape,
-                            color = StatusRed,
-                        ) {}
-                        Spacer(modifier = Modifier.width(7.dp))
-                        Text(
-                            text = stringResource(R.string.diagnostics_recording_main),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = StatusRed,
-                            fontWeight = FontWeight.SemiBold,
-                        )
-                    }
                 }
             }
             if (isRunning && uptimeSeconds > 0) {

@@ -104,22 +104,13 @@
     <string name="settings_dynamic_color">Adaptive colors</string>
     <string name="settings_dynamic_color_desc">Use the device Material You palette</string>
     <string name="settings_support">Support and diagnostics</string>
-    <string name="settings_connection_log">Connection log</string>
-    <string name="settings_connection_log_desc">View live connection events and create a diagnostic report.</string>
+    <string name="settings_connection_log">Diagnostic log</string>
+    <string name="settings_connection_log_desc">Review the always-on privacy-safe log and share a report immediately after a problem.</string>
     <string name="settings_detailed_stats">Show detailed statistics on the main screen</string>
     <string name="settings_detailed_stats_desc">Displays connection, route, pool, and error counters.</string>
-    <string name="diagnostics_start">Start diagnostics</string>
-    <string name="diagnostics_stop">Finish diagnostics</string>
-    <string name="diagnostics_controls">Connection diagnostics</string>
-    <string name="diagnostics_report_title">Connection diagnostics</string>
-    <string name="diagnostics_active_title">Diagnostics enabled</string>
-    <string name="diagnostics_recording_main">Diagnostics recording is active</string>
-    <string name="diagnostics_start_instructions">Use diagnostics when Telegram cannot connect, media does not load, or the proxy is unstable. Start diagnostics, reproduce the problem in Telegram, then return here and finish.</string>
-    <string name="diagnostics_active_instructions">Return to Telegram and reproduce the problem. When finished, come back here, finish diagnostics, and share the report from the top bar.</string>
-    <string name="diagnostics_report_note">The report keeps the latest 4 MB of technical connection events. Message and media contents and the proxy secret are not recorded.</string>
-    <string name="diagnostics_continue_background">Continue in background</string>
+    <string name="diagnostics_always_on_note">The app continuously keeps a bounded history of recent technical events. After a problem, share the report immediately; reproducing it is not required.</string>
     <string name="diagnostics_export">Share report</string>
-    <string name="diagnostics_clear">Delete saved report</string>
+    <string name="diagnostics_clear">Clear diagnostic log</string>
     <string name="diagnostics_export_failed">Unable to share diagnostic report</string>
 
     <!-- Validation errors -->
@@ -179,7 +170,7 @@
     <string name="github" translatable="false">GitHub</string>
 
     <!-- Event log -->
-    <string name="log_title">Connection log</string>
+    <string name="log_title">Diagnostic log</string>
     <string name="log_not_recording">Live events</string>
     <string name="log_empty">No connection events yet</string>
     <string name="connection_advice_title">Network recommendation</string>
@@ -206,16 +197,16 @@
     <string name="help_battery_text">The Power usage section lets you balance lower battery use against background connection reliability. It contains independent controls for device sleep, prepared connections, keepalive packets, route checks, and shared Cloudflare-domain updates. “Keep device awake” gives the most reliable screen-off operation but prevents deep sleep. Disable it first when investigating high idle power use. If connections then stop with the screen off, enable it again or allow unrestricted background operation in Android settings. “Prepare WebSocket connections” reduces connection delay but retains idle sockets. Route checks and domain updates can be disabled independently; automatic routing can still react to failures from real Telegram sessions.\n\nThe WebSocket keepalive interval applies to idle active sessions. 30 seconds prioritizes reliability; 90 or 180 seconds reduces cellular radio wakeups, but some networks may close idle connections.</string>
     <string name="help_theme_title">Theme and appearance</string>
     <string name="help_theme_text">Choose System, Light, or Dark appearance. On Android 12 and newer, adaptive colors use the Material You palette generated from the device wallpaper. Appearance changes are applied and saved automatically.</string>
-    <string name="help_log_title">Connection log</string>
-    <string name="help_log_text">The screen shows the latest 300 connection events from memory. To prepare a report, open Connection diagnostics, tap “Start diagnostics,” reproduce the problem in Telegram, return here, and tap “Finish diagnostics.” Then use “Share report” in the top bar.\n\nDiagnostics continues until manually finished and keeps approximately 4 MB of the latest technical events, discarding the oldest first. Message and media contents and the proxy secret are not recorded. Exported reports also redact proxy links and IP addresses. Saved files expire after 7 days. Deleting a saved report does not clear the events shown on screen.</string>
+    <string name="help_log_title">Diagnostic log</string>
+    <string name="help_log_text">The diagnostic log runs continuously and keeps approximately 4 MB of the latest technical events, discarding the oldest first. After a connection problem, open the log and share the report immediately; you do not need to reproduce the problem under recording.\n\nEvents are queued and written in batches away from proxy threads. Message and media contents and the proxy secret are not recorded. Sensitive proxy links, secrets, and IP addresses are redacted before persistence and again during export. Saved files expire after 7 days. Clearing the log deletes the accumulated history, and collection then continues automatically.</string>
     <string name="help_troubleshooting_title">Troubleshooting</string>
-    <string name="help_troubleshooting_text">Media does not load in automatic mode: keep the download open while the app detects the stalled media connection and retries that datacenter through Cloudflare.\n\nMedia does not load in manual mode: select “Try Cloudflare first” and leave Settings to apply the change.\n\nCloudflare fails: turn automatic mode off, test the domains, and look for HTTP 429 in the connection log.\n\nConnections stop with the screen off: allow background operation and disable battery optimization for the app.\n\nProblem persists: start Connection diagnostics, reproduce the issue, finish diagnostics, and share the report.</string>
+    <string name="help_troubleshooting_text">Media does not load in automatic mode: keep the download open while the app detects the stalled media connection and retries that datacenter through Cloudflare.\n\nMedia does not load in manual mode: select “Try Cloudflare first” and leave Settings to apply the change.\n\nCloudflare fails: turn automatic mode off, test the domains, and look for HTTP 429 in the diagnostic log.\n\nConnections stop with the screen off: allow background operation and disable battery optimization for the app.\n\nProblem persists: open the diagnostic log immediately after the failure and share the already collected report.</string>
     <string name="help_background_title">Background operation</string>
     <string name="help_background_text">Keep the foreground-service notification enabled. Some Android vendors may still restrict background networking; exclude the app from battery optimization if connections stop when the screen is off. If “Keep device awake” is off, enable it again before investigating other screen-off failures.</string>
 
     <!-- About screen -->
     <string name="about_title">About</string>
-    <string name="about_version">Version %1$s (%2$d)</string>
+    <string name="about_version">Version %1$s</string>
     <string name="about_description">An on-device MTProto proxy for Telegram with WebSocket transport and automatic Cloudflare/TCP fallback.</string>
     <string name="about_local_title">Local and private</string>
     <string name="about_local_text">Runs entirely on your device without root, an account, ads, or analytics.</string>

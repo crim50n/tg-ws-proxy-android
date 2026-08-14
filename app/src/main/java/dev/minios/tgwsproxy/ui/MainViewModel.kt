@@ -71,7 +71,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         // Monitor service state
         viewModelScope.launch {
             while (isActive) {
-                DiagnosticLogger.refresh()
                 if (ProxyService.isRunning) {
                     _stats.value = ProxyStats.snapshot()
                 } else if (!ProxyService.isActive) {
@@ -216,10 +215,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _toastMessage.tryEmit(ctx.getString(R.string.update_open_failed))
         }
     }
-
-    fun startDiagnostics() = DiagnosticLogger.start()
-
-    fun stopDiagnostics() = DiagnosticLogger.stop()
 
     fun clearDiagnostics() = DiagnosticLogger.clear()
 
