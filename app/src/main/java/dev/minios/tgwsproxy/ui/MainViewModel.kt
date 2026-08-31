@@ -38,6 +38,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .onEach { _configLoaded.value = true }
         .stateIn(viewModelScope, SharingStarted.Eagerly, ProxyConfig())
     val configLoaded: StateFlow<Boolean> = _configLoaded.asStateFlow()
+    val powerProfileNoticePending: StateFlow<Boolean> = configRepo.powerProfileNoticePending
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val serviceState = ProxyService.serviceState
     val runtimeRouteMode = ProxyService.runtimeRouteMode
@@ -93,6 +95,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun stopProxy() {
         val ctx = getApplication<Application>()
         ProxyService.stop(ctx)
+    }
+
+    fun dismissPowerProfileNotice() {
+        viewModelScope.launch { configRepo.dismissPowerProfileNotice() }
     }
 
     fun saveConfig(newConfig: ProxyConfig) {

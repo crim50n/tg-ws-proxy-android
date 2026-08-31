@@ -11,8 +11,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -89,6 +95,7 @@ private fun AppNavigation(viewModel: MainViewModel) {
     val diagnosticEntries by viewModel.diagnosticEntries.collectAsState()
     val connectionAdvice by viewModel.connectionAdvice.collectAsState()
     val updateState by viewModel.updateState.collectAsState()
+    val powerProfileNoticePending by viewModel.powerProfileNoticePending.collectAsState()
 
     // Handle transient messages from the view model.
     val context = LocalContext.current
@@ -99,6 +106,23 @@ private fun AppNavigation(viewModel: MainViewModel) {
     }
 
     var currentScreen by rememberSaveable { mutableStateOf(Screen.Main) }
+    if (powerProfileNoticePending) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(androidx.compose.ui.res.stringResource(R.string.power_profile_update_title)) },
+            text = {
+                Text(
+                    text = androidx.compose.ui.res.stringResource(R.string.power_profile_update_message),
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = viewModel::dismissPowerProfileNotice) {
+                    Text(androidx.compose.ui.res.stringResource(R.string.understood))
+                }
+            },
+        )
+    }
     val closeSettings: (ProxyConfig) -> Unit = { latestConfig ->
         viewModel.finishSettings(latestConfig)
         viewModel.clearCfTestResult()

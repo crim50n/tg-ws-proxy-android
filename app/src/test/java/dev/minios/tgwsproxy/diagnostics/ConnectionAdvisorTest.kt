@@ -237,10 +237,10 @@ class ConnectionAdvisorTest {
     fun `background connection settings require restart`() {
         val config = ProxyConfig()
 
-        assertEquals(true, requiresProxyRestart(config, config.copy(keepCpuAwake = false)))
-        assertEquals(true, requiresProxyRestart(config, config.copy(preconnectWebSockets = false)))
-        assertEquals(true, requiresProxyRestart(config, config.copy(routeProbesEnabled = false)))
-        assertEquals(true, requiresProxyRestart(config, config.copy(cfDomainRefreshEnabled = false)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(keepCpuAwake = true)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(preconnectWebSockets = true)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(routeProbesEnabled = true)))
+        assertEquals(true, requiresProxyRestart(config, config.copy(cfDomainRefreshEnabled = true)))
         assertEquals(true, requiresProxyRestart(config, config.copy(webSocketPingIntervalSeconds = 90)))
         assertEquals(true, requiresProxyRestart(config, config.copy(showTrafficInNotification = false)))
     }

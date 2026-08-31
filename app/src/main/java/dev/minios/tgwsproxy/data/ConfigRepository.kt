@@ -9,10 +9,56 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "tg_ws_proxy_config")
 private val SECRET_PATTERN = Regex("^[0-9a-fA-F]{32}$")
+private const val POWER_PROFILE_VERSION = 1
+
+internal data class PowerProfile(
+    val keepCpuAwake: Boolean,
+    val preconnectWebSockets: Boolean,
+    val routeProbesEnabled: Boolean,
+    val cfDomainRefreshEnabled: Boolean,
+    val webSocketPingIntervalSeconds: Int,
+)
+
+internal val LEGACY_DEFAULT_POWER_PROFILE = PowerProfile(
+    keepCpuAwake = true,
+    preconnectWebSockets = true,
+    routeProbesEnabled = true,
+    cfDomainRefreshEnabled = true,
+    webSocketPingIntervalSeconds = 30,
+)
+
+internal val BATTERY_SAVING_DEFAULT_POWER_PROFILE = PowerProfile(
+    keepCpuAwake = false,
+    preconnectWebSockets = false,
+    routeProbesEnabled = false,
+    cfDomainRefreshEnabled = false,
+    webSocketPingIntervalSeconds = 180,
+)
+
+internal data class PowerProfileMigration(
+    val profile: PowerProfile,
+    val showNotice: Boolean,
+)
+
+internal fun resolvePowerProfileMigration(
+    existingInstall: Boolean,
+    current: PowerProfile,
+): PowerProfileMigration {
+    val migrateLegacyDefaults = existingInstall && current == LEGACY_DEFAULT_POWER_PROFILE
+    return PowerProfileMigration(
+        profile = if (!existingInstall || migrateLegacyDefaults) {
+            BATTERY_SAVING_DEFAULT_POWER_PROFILE
+        } else {
+            current
+        },
+        showNotice = migrateLegacyDefaults,
+    )
+}
 
 /**
  * Persistent configuration storage using DataStore.
@@ -40,6 +86,41 @@ class ConfigRepository(private val context: Context) {
         val SHOW_DETAILED_STATS = booleanPreferencesKey("show_detailed_stats")
         val APP_THEME = stringPreferencesKey("app_theme")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
+        val POWER_PROFILE_VERSION = intPreferencesKey("power_profile_version")
+        val POWER_PROFILE_NOTICE_PENDING = booleanPreferencesKey("power_profile_notice_pending")
+    }
+
+    private suspend fun preparePowerProfile() {
+        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+        val appWasUpdated = packageInfo.lastUpdateTime > packageInfo.firstInstallTime
+        context.dataStore.edit { prefs ->
+            if ((prefs[Keys.POWER_PROFILE_VERSION] ?: 0) >= POWER_PROFILE_VERSION) return@edit
+
+            val existingInstall = appWasUpdated && prefs.asMap().isNotEmpty()
+            val current = PowerProfile(
+                keepCpuAwake = prefs[Keys.KEEP_CPU_AWAKE] ?: LEGACY_DEFAULT_POWER_PROFILE.keepCpuAwake,
+                preconnectWebSockets = prefs[Keys.PRECONNECT_WEBSOCKETS]
+                    ?: LEGACY_DEFAULT_POWER_PROFILE.preconnectWebSockets,
+                routeProbesEnabled = prefs[Keys.ROUTE_PROBES_ENABLED]
+                    ?: LEGACY_DEFAULT_POWER_PROFILE.routeProbesEnabled,
+                cfDomainRefreshEnabled = prefs[Keys.CF_DOMAIN_REFRESH_ENABLED]
+                    ?: LEGACY_DEFAULT_POWER_PROFILE.cfDomainRefreshEnabled,
+                webSocketPingIntervalSeconds = (
+                    prefs[Keys.WS_PING_INTERVAL_SECONDS]
+                        ?: LEGACY_DEFAULT_POWER_PROFILE.webSocketPingIntervalSeconds
+                    ).coerceIn(30, 300),
+            )
+            val migration = resolvePowerProfileMigration(existingInstall, current)
+            val resolved = migration.profile
+
+            prefs[Keys.KEEP_CPU_AWAKE] = resolved.keepCpuAwake
+            prefs[Keys.PRECONNECT_WEBSOCKETS] = resolved.preconnectWebSockets
+            prefs[Keys.ROUTE_PROBES_ENABLED] = resolved.routeProbesEnabled
+            prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] = resolved.cfDomainRefreshEnabled
+            prefs[Keys.WS_PING_INTERVAL_SECONDS] = resolved.webSocketPingIntervalSeconds
+            prefs[Keys.POWER_PROFILE_NOTICE_PENDING] = migration.showNotice
+            prefs[Keys.POWER_PROFILE_VERSION] = POWER_PROFILE_VERSION
+        }
     }
 
     /**
@@ -65,6 +146,7 @@ class ConfigRepository(private val context: Context) {
      * Flow of the current config.
      */
     val configFlow: Flow<ProxyConfig> = flow {
+        preparePowerProfile()
         val stableSecret = ensureSecret()
         emitAll(context.dataStore.data.map { prefs ->
         ProxyConfig(
@@ -81,11 +163,11 @@ class ConfigRepository(private val context: Context) {
             cfProxyPriority = prefs[Keys.CF_PROXY_PRIORITY] ?: true,
             cfProxyFirst = prefs[Keys.CF_PROXY_FIRST] ?: false,
             autoOptimizeConnection = prefs[Keys.AUTO_OPTIMIZE_CONNECTION] ?: true,
-            keepCpuAwake = prefs[Keys.KEEP_CPU_AWAKE] ?: true,
-            preconnectWebSockets = prefs[Keys.PRECONNECT_WEBSOCKETS] ?: true,
-            routeProbesEnabled = prefs[Keys.ROUTE_PROBES_ENABLED] ?: true,
-            cfDomainRefreshEnabled = prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] ?: true,
-            webSocketPingIntervalSeconds = (prefs[Keys.WS_PING_INTERVAL_SECONDS] ?: 30).coerceIn(30, 300),
+            keepCpuAwake = prefs[Keys.KEEP_CPU_AWAKE] ?: false,
+            preconnectWebSockets = prefs[Keys.PRECONNECT_WEBSOCKETS] ?: false,
+            routeProbesEnabled = prefs[Keys.ROUTE_PROBES_ENABLED] ?: false,
+            cfDomainRefreshEnabled = prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] ?: false,
+            webSocketPingIntervalSeconds = (prefs[Keys.WS_PING_INTERVAL_SECONDS] ?: 180).coerceIn(30, 300),
             showTrafficInNotification = prefs[Keys.SHOW_TRAFFIC_IN_NOTIFICATION] ?: true,
             cfProxyUserDomain = prefs[Keys.CF_PROXY_USER_DOMAIN]
                 ?.trim()
@@ -103,6 +185,14 @@ class ConfigRepository(private val context: Context) {
      * Get the current config snapshot.
      */
     suspend fun getConfig(): ProxyConfig = configFlow.first()
+
+    val powerProfileNoticePending: Flow<Boolean> = context.dataStore.data
+        .map { it[Keys.POWER_PROFILE_NOTICE_PENDING] ?: false }
+        .distinctUntilChanged()
+
+    suspend fun dismissPowerProfileNotice() {
+        context.dataStore.edit { it[Keys.POWER_PROFILE_NOTICE_PENDING] = false }
+    }
 
     /**
      * Save config to DataStore.

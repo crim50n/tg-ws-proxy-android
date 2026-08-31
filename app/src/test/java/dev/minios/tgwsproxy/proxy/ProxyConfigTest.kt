@@ -15,6 +15,11 @@ class ProxyConfigTest {
         assertEquals("system", config.appTheme)
         assertEquals(true, config.dynamicColor)
         assertEquals(true, config.autoOptimizeConnection)
+        assertEquals(false, config.keepCpuAwake)
+        assertEquals(false, config.preconnectWebSockets)
+        assertEquals(false, config.routeProbesEnabled)
+        assertEquals(false, config.cfDomainRefreshEnabled)
+        assertEquals(180, config.webSocketPingIntervalSeconds)
         assertEquals(RuntimeRouteMode.WS_CF_TCP, config.runtimeRouteMode())
     }
 
