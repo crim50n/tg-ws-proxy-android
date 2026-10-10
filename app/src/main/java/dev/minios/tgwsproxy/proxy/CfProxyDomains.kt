@@ -198,7 +198,7 @@ object CfProxyDomains {
             }
         } catch (e: Exception) {
             if (generation == refreshGeneration.get()) {
-                Log.w(TAG, "Failed to refresh CF proxy domains: ${e.message}")
+                Log.w(TAG, "Failed to refresh CF proxy domains: ${e.javaClass.simpleName}")
             }
         } finally {
             synchronized(this) {

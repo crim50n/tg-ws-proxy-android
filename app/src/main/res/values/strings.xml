@@ -79,6 +79,8 @@
     <string name="settings_pool_size">Prepared WebSocket connections</string>
     <string name="settings_background">Power usage</string>
     <string name="settings_background_desc">Choose the balance between lower battery use and reliable background connections.</string>
+    <string name="settings_start_on_boot">Start proxy when the device turns on</string>
+    <string name="settings_start_on_boot_desc">Starts the proxy automatically after Android finishes booting. Disabled by default.</string>
     <string name="settings_keep_cpu_awake">Keep device awake</string>
     <string name="settings_keep_cpu_awake_desc">Prevents deep sleep for the most reliable screen-off operation. Turning it off reduces idle power use.</string>
     <string name="settings_preconnect_ws">Prepare WebSocket connections</string>
@@ -127,6 +129,8 @@
     <string name="notification_channel_desc">Shows proxy status</string>
     <string name="notification_advice_channel_name">Connection recommendations</string>
     <string name="notification_advice_channel_desc">Shows route recommendations when automatic connection mode is off</string>
+    <string name="notification_update_channel_name">App updates</string>
+    <string name="notification_update_channel_desc">Shows new versions only while the proxy service is running</string>
     <string name="notification_title" translatable="false">TG WS Proxy</string>
     <string name="notification_running">Traffic: %1$s</string>
     <string name="notification_running_no_traffic">Proxy is running</string>
@@ -200,7 +204,7 @@
     <string name="help_troubleshooting_title">Troubleshooting</string>
     <string name="help_troubleshooting_text">Media does not load in automatic mode: keep the download open while the app detects the stalled media connection and retries that datacenter through Cloudflare.\n\nMedia does not load in manual mode: select “Try Cloudflare first” and leave Settings to apply the change.\n\nCloudflare fails: turn automatic mode off, test the domains, and look for HTTP 429 in the diagnostic log.\n\nConnections stop with the screen off: allow background operation and disable battery optimization for the app.\n\nProblem persists: open the diagnostic log immediately after the failure and share the already collected report.</string>
     <string name="help_background_title">Background operation</string>
-    <string name="help_background_text">Keep the foreground-service notification enabled. Some Android vendors may still restrict background networking; exclude the app from battery optimization if connections stop when the screen is off. If “Keep device awake” is off, enable it again before investigating other screen-off failures.</string>
+    <string name="help_background_text">“Start proxy when the device turns on” can launch the foreground service automatically after Android finishes booting. It is disabled by default and only works after the app has been opened at least once. After force-stopping the app in Android settings, open it again to restore boot startup.\n\nKeep the foreground-service notification enabled. Some Android vendors may still restrict background networking; exclude the app from battery optimization if connections stop when the screen is off. If “Keep device awake” is off, enable it again before investigating other screen-off failures.</string>
 
     <!-- About screen -->
     <string name="about_title">About</string>

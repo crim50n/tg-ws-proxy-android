@@ -7,6 +7,15 @@ import org.junit.Test
 class ProxyServiceStateTest {
 
     @Test
+    fun `internal restart preserves unread update notification`() {
+        assertTrue(ProxyServiceState.RESTARTING.keepsUpdateNotification)
+        assertFalse(ProxyServiceState.STOPPING.keepsUpdateNotification)
+        assertFalse(ProxyServiceState.STOPPED.keepsUpdateNotification)
+        assertFalse(ProxyServiceState.STARTING.keepsUpdateNotification)
+        assertFalse(ProxyServiceState.RUNNING.keepsUpdateNotification)
+    }
+
+    @Test
     fun `only stopped state accepts start`() {
         assertTrue(ProxyServiceState.STOPPED.acceptsStart)
         assertFalse(ProxyServiceState.STARTING.acceptsStart)

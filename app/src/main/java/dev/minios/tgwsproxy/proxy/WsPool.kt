@@ -1,211 +1,249 @@
 package dev.minios.tgwsproxy.proxy
 
-import android.util.Log
+import android.os.SystemClock
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicLong
+import java.util.ArrayDeque
+import javax.net.ssl.SSLSocket
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 
-private const val TAG = "WsPool"
-
-/**
- * WebSocket connection pool for pre-established connections to Telegram DCs.
- * Matches the Python _WsPool implementation including:
- * - Parallel connection establishment during refill
- * - Concurrent refill guard (only one refill per DC key at a time)
- * - Proper cleanup of expired connections (async close, not just remove)
- * - Dynamic DC redirects (read from config at refill time, not fixed at construction)
- * - is_closing() check on pooled connections (matching Python transport.is_closing())
- */
-class WsPool(
-    private val poolSize: Int = 4,
-    private val maxAgeMs: Long = 120_000,
-    private val bufferSize: Int = 256 * 1024,
+/** Idle direct WebSockets, with one rotation/refill worker per DC/media route. */
+class WsPool internal constructor(
+    private val poolSize: Int,
+    private val maxAgeMs: Long,
+    private val bufferSize: Int,
+    private val clock: () -> Long,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val connector: ((String, List<String>, (SSLSocket) -> Unit) -> RawWebSocket?)? = null,
 ) {
-    private data class PooledConnection(
-        val ws: RawWebSocket,
-        val createdAt: Long = System.currentTimeMillis(),
-    ) {
-        fun isExpired(maxAge: Long): Boolean = System.currentTimeMillis() - createdAt > maxAge
+    constructor(
+        poolSize: Int = 4,
+        maxAgeMs: Long = 120_000,
+        bufferSize: Int = 256 * 1024,
+    ) : this(poolSize, maxAgeMs, bufferSize, SystemClock::elapsedRealtime)
+
+    private data class PooledConnection(val ws: RawWebSocket, val createdAt: Long)
+    private class Bucket(val dc: Int, val isMedia: Boolean, val targetIp: String) {
+        val idle = ArrayDeque<PooledConnection>()
+        val pending = mutableSetOf<SSLSocket>()
+        val wake = Channel<Unit>(Channel.CONFLATED)
+        var job: Job? = null
+        var failures = 0
+        var retryAfter = 0L
     }
 
-    private data class RefillToken(val generation: Long, val poolKey: Int)
-
-    private val pools = ConcurrentHashMap<Int, ConcurrentLinkedQueue<PooledConnection>>()
-    private val running = AtomicBoolean(false)
-    private val refilling = ConcurrentHashMap.newKeySet<RefillToken>()
-    private val generation = AtomicLong(0)
-    private val lifecycleLock = Any()
+    private val lock = Any()
+    private val buckets = mutableMapOf<Int, Bucket>()
+    private var running = false
     private var scope: CoroutineScope? = null
-
-    // Redirects are read at refill time so network recovery can reuse current config.
-    @Volatile
+    private var scopeMonitor: Job? = null
+    private var owner: Any? = null
     private var dcRedirects: Map<Int, String> = emptyMap()
 
-    fun start(coroutineScope: CoroutineScope) {
-        if (running.getAndSet(true)) return
-        scope = coroutineScope
+    init {
+        require(poolSize >= 0 && maxAgeMs > 0)
     }
 
-    /**
-     * Warm up the pool for all configured DCs.
-     * Routes through triggerRefill() instead of launching fillPool() directly,
-     * so the concurrent refill guard is respected (matching Python warmup -> _schedule_refill).
-     * and takes the current redirects as a parameter.
-     */
-    fun warmUp(redirects: Map<Int, String>) {
-        dcRedirects = redirects
-        for ((dc, _) in redirects) {
-            for (isMedia in listOf(false, true)) {
-                val key = poolKey(dc, isMedia)
-                triggerRefill(key, dc, isMedia)
+    fun start(coroutineScope: CoroutineScope) = synchronized(lock) {
+        if (!running && coroutineScope.isActive) {
+            scope = coroutineScope
+            running = true
+            val token = Any()
+            owner = token
+            // Cancellation cannot wait for blocking IO children before closing their sockets.
+            scopeMonitor = coroutineScope.launch(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    awaitCancellation()
+                } finally {
+                    synchronized(lock) {
+                        if (owner === token) {
+                            running = false
+                            owner = null
+                            invalidateBuckets()
+                            scope = null
+                        }
+                    }
+                }
             }
         }
-        Log.i(TAG, "WS pool warmup started for ${redirects.size} DC(s)")
     }
 
-    fun stop() {
-        synchronized(lifecycleLock) {
-            running.set(false)
-            generation.incrementAndGet()
-            closePooledConnections()
-            refilling.clear()
+    fun warmUp(redirects: Map<Int, String>) = synchronized(lock) {
+        if (!running) return@synchronized
+        if (dcRedirects != redirects) invalidateBuckets()
+        dcRedirects = redirects.toMap()
+        if (poolSize <= 0) return@synchronized
+        for (dc in dcRedirects.keys) {
+            bucketFor(dc, false)
+            bucketFor(dc, true)
         }
     }
 
-    fun resetAndWarm(redirects: Map<Int, String>) {
-        synchronized(lifecycleLock) {
-            if (!running.get()) return
-            generation.incrementAndGet()
-            closePooledConnections()
-            refilling.clear()
-        }
+    fun stop() = synchronized(lock) {
+        running = false
+        owner = null
+        scopeMonitor?.cancel()
+        scopeMonitor = null
+        invalidateBuckets()
+        scope = null
+    }
+
+    fun resetAndWarm(redirects: Map<Int, String>) = synchronized(lock) {
+        if (!running) return@synchronized
+        invalidateBuckets()
         warmUp(redirects)
     }
 
-    /**
-     * Update DC redirects at runtime (called when config changes).
-     */
-    fun updateRedirects(redirects: Map<Int, String>) {
-        dcRedirects = redirects
+    fun updateRedirects(redirects: Map<Int, String>) = warmUp(redirects)
+
+    fun get(dc: Int, isMedia: Boolean): RawWebSocket? = synchronized(lock) {
+        val bucket = bucketFor(dc, isMedia) ?: return@synchronized null
+        var selected: RawWebSocket? = null
+        while (bucket.idle.isNotEmpty()) {
+            val connection = bucket.idle.removeFirst()
+            if (isStale(connection, clock())) {
+                connection.ws.abort()
+            } else {
+                selected = connection.ws
+                break
+            }
+        }
+        bucket.wake.trySend(Unit)
+        selected
     }
 
-    /**
-     * Get a connection from the pool for the given DC.
-     * Returns null if no valid pooled connection is available.
-     *
-     * Also rejects output-shutdown sockets and closes expired connections asynchronously.
-     */
-    fun get(dc: Int, isMedia: Boolean): RawWebSocket? {
+    private fun bucketFor(dc: Int, isMedia: Boolean): Bucket? {
+        if (!running || poolSize <= 0 || scope?.isActive != true) return null
+        val targetIp = dcRedirects[dc] ?: return null
         val key = poolKey(dc, isMedia)
-        val queue = pools.getOrPut(key) { ConcurrentLinkedQueue() }
-
-        while (true) {
-            val conn = queue.poll() ?: break
-            // Reject both fully closed and output-shutdown sockets.
-            if (!conn.isExpired(maxAgeMs) && !conn.ws.isClosed() && !conn.ws.isOutputShutdown()) {
-                // Trigger refill in background
-                triggerRefill(key, dc, isMedia)
-                return conn.ws
-            }
-            // Close expired or dead connections without blocking checkout.
-            val ws = conn.ws
-            scope?.launch(Dispatchers.IO) {
-                try { ws.close() } catch (_: Exception) {}
-            }
-        }
-
-        // Trigger refill
-        triggerRefill(key, dc, isMedia)
-        return null
+        buckets[key]?.let { return it }
+        val bucket = Bucket(dc, isMedia, targetIp)
+        buckets[key] = bucket
+        bucket.job = scope!!.launch(dispatcher, start = CoroutineStart.LAZY) { maintain(bucket) }
+        bucket.job!!.start()
+        return bucket
     }
 
-    private fun triggerRefill(key: Int, dc: Int, isMedia: Boolean) {
-        // Guard: only one refill per key at a time (matching Python _refilling set)
-        val refillGeneration = generation.get()
-        val token = RefillToken(refillGeneration, key)
-        if (!refilling.add(token)) return
-        val s = scope ?: run {
-            refilling.remove(token)
-            return
-        }
-        s.launch(Dispatchers.IO) {
-            try {
-                fillPool(key, dc, isMedia, refillGeneration)
-            } finally {
-                refilling.remove(token)
-            }
-        }
-    }
+    private fun owns(bucket: Bucket): Boolean = running &&
+        buckets[poolKey(bucket.dc, bucket.isMedia)] === bucket
 
-    private suspend fun fillPool(key: Int, dc: Int, isMedia: Boolean, refillGeneration: Long) {
-        if (!running.get() || generation.get() != refillGeneration) return
-        // Read the target dynamically from the current redirect map.
-        val targetIp = dcRedirects[dc] ?: return
-        val queue = pools.getOrPut(key) { ConcurrentLinkedQueue() }
+    private fun isStale(connection: PooledConnection, now: Long): Boolean =
+        now - connection.createdAt >= maxAgeMs || connection.ws.isClosed() ||
+            connection.ws.isOutputShutdown()
 
-        // Remove and close expired connections asynchronously
-        val expired = mutableListOf<PooledConnection>()
-        queue.removeAll { conn ->
-            val dead = conn.isExpired(maxAgeMs) || conn.ws.isClosed() || conn.ws.isOutputShutdown()
-            if (dead) expired.add(conn)
-            dead
-        }
-        // Close expired connections asynchronously.
-        for (conn in expired) {
-            scope?.launch(Dispatchers.IO) {
-                try { conn.ws.close() } catch (_: Exception) {}
-            }
-        }
-
-        val needed = poolSize - queue.size
-        if (needed <= 0) return
-        val refillStartedAt = System.currentTimeMillis()
-
-        val domains = MtProtoConstants.wsDomainsForDc(dc, isMedia)
-
-        // Establish connections in parallel (matching Python's asyncio.create_task approach)
-        coroutineScope {
-            val deferreds = (0 until needed).map {
-                async(Dispatchers.IO) {
-                    if (!running.get()) return@async null
-                    connectOne(targetIp, domains)
-                }
-            }
-            for (d in deferreds) {
-                try {
-                    val ws = d.await()
-                    if (ws != null) {
-                        synchronized(lifecycleLock) {
-                            if (running.get() && generation.get() == refillGeneration) {
-                                queue.offer(PooledConnection(ws))
-                            } else {
-                                try { ws.close() } catch (_: Exception) {}
-                            }
+    private suspend fun maintain(bucket: Bucket) {
+        try {
+            while (currentCoroutineContext().isActive) {
+                val needed = synchronized(lock) {
+                    if (!owns(bucket)) return
+                    val now = clock()
+                    val iterator = bucket.idle.iterator()
+                    while (iterator.hasNext()) {
+                        val connection = iterator.next()
+                        if (isStale(connection, now)) {
+                            iterator.remove()
+                            connection.ws.abort()
                         }
                     }
-                } catch (_: Exception) {}
+                    if (now >= bucket.retryAfter) poolSize - bucket.idle.size else 0
+                }
+                if (needed > 0) {
+                    refill(bucket, needed)
+                    continue
+                }
+                val waitMs = synchronized(lock) {
+                    if (!owns(bucket)) return
+                    val now = clock()
+                    val expiry = bucket.idle.minOfOrNull { it.createdAt + maxAgeMs } ?: Long.MAX_VALUE
+                    val retry = if (bucket.idle.size < poolSize) bucket.retryAfter else Long.MAX_VALUE
+                    (minOf(expiry, retry) - now).coerceAtLeast(1L)
+                }
+                withTimeoutOrNull(waitMs) { bucket.wake.receive() }
+            }
+        } finally {
+            synchronized(lock) {
+                if (buckets[poolKey(bucket.dc, bucket.isMedia)] === bucket) {
+                    buckets.remove(poolKey(bucket.dc, bucket.isMedia))
+                    closeBucket(bucket)
+                }
             }
         }
-
-        if (TgWsProxyServer.globalVerbose) Log.d(TAG, "WS pool refilled DC$dc${if (isMedia) "m" else ""}: ${queue.size} ready")
-        DiagnosticLogger.event(
-            "pool_refill_completed",
-            "dc" to dc,
-            "media" to isMedia,
-            "requested" to needed,
-            "ready" to queue.size,
-            "elapsedMs" to System.currentTimeMillis() - refillStartedAt,
-        )
     }
 
-    /**
-     * Try connecting to one WS endpoint, rotating domains on redirect.
-     * Matches Python _WsPool._connect_one().
-     */
-    private fun connectOne(targetIp: String, domains: List<String>): RawWebSocket? {
+    private suspend fun refill(bucket: Bucket, needed: Int) {
+        val startedAt = clock()
+        var connected = 0
+        val domains = MtProtoConstants.wsDomainsForDc(bucket.dc, bucket.isMedia)
+        coroutineScope {
+            repeat(needed) {
+                launch(dispatcher) {
+                    var ws: RawWebSocket? = null
+                    var socket: SSLSocket? = null
+                    var adopted = false
+                    try {
+                        ensureActive()
+                        val onSocketCreated: (SSLSocket) -> Unit = { created ->
+                            synchronized(lock) {
+                                socket?.let { bucket.pending.remove(it) }
+                                socket = created
+                                if (!owns(bucket) || !isActive) {
+                                    created.close()
+                                    throw CancellationException("WS pool reset")
+                                }
+                                bucket.pending.add(created)
+                            }
+                        }
+                        ws = if (connector != null) {
+                            connector.invoke(bucket.targetIp, domains, onSocketCreated)
+                        } else {
+                            connectOne(bucket.targetIp, domains, onSocketCreated)
+                        }
+                        ensureActive()
+                        val ready = ws
+                        if (ready != null) synchronized(lock) {
+                            if (owns(bucket)) {
+                                bucket.idle.addLast(PooledConnection(ready, clock()))
+                                socket?.let { bucket.pending.remove(it) }
+                                connected++
+                                adopted = true
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // A failed dial contributes to the batch backoff below.
+                    } finally {
+                        synchronized(lock) { socket?.let { bucket.pending.remove(it) } }
+                        if (!adopted) {
+                            ws?.abort()
+                            try { socket?.close() } catch (_: Exception) {}
+                        }
+                    }
+                }
+            }
+        }
+        synchronized(lock) {
+            if (!owns(bucket)) return
+            if (connected > 0) {
+                bucket.failures = 0
+                bucket.retryAfter = 0
+            } else {
+                bucket.failures = (bucket.failures + 1).coerceAtMost(13)
+                bucket.retryAfter = clock() + refillDelayMs(bucket.failures)
+            }
+            DiagnosticLogger.event(
+                "pool_refill_completed",
+                "dc" to bucket.dc,
+                "media" to bucket.isMedia,
+                "requested" to needed,
+                "ready" to bucket.idle.size,
+                "elapsedMs" to clock() - startedAt,
+                "retryInMs" to (bucket.retryAfter - clock()).coerceAtLeast(0),
+            )
+        }
+    }
+
+    private fun connectOne(targetIp: String, domains: List<String>, onSocketCreated: (SSLSocket) -> Unit): RawWebSocket? {
         for (domain in domains) {
             try {
                 return RawWebSocket.connect(
@@ -213,10 +251,13 @@ class WsPool(
                     domain = domain,
                     connectTimeoutMs = 8000,
                     bufferSize = bufferSize,
+                    onSocketCreated = onSocketCreated,
                 )
             } catch (e: WsHandshakeError) {
                 if (e.isRedirect) continue
                 return null
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 return null
             }
@@ -224,17 +265,27 @@ class WsPool(
         return null
     }
 
-    private fun poolKey(dc: Int, isMedia: Boolean): Int {
-        return dc * 10 + (if (isMedia) 1 else 0)
+    private fun invalidateBuckets() {
+        val obsolete = buckets.values.toList()
+        buckets.clear()
+        obsolete.forEach {
+            it.job?.cancel()
+            closeBucket(it)
+        }
     }
 
-    private fun closePooledConnections() {
-        pools.values.forEach { queue ->
-            while (true) {
-                val conn = queue.poll() ?: break
-                try { conn.ws.close() } catch (_: Exception) {}
-            }
-        }
-        pools.clear()
+    private fun closeBucket(bucket: Bucket) {
+        bucket.wake.close()
+        bucket.idle.forEach { it.ws.abort() }
+        bucket.idle.clear()
+        bucket.pending.forEach { try { it.close() } catch (_: Exception) {} }
+        bucket.pending.clear()
+    }
+
+    private fun poolKey(dc: Int, isMedia: Boolean): Int = dc * 10 + if (isMedia) 1 else 0
+
+    internal companion object {
+        fun refillDelayMs(failures: Int): Long =
+            (1_000L shl (failures - 1).coerceIn(0, 12)).coerceAtMost(3_600_000L)
     }
 }

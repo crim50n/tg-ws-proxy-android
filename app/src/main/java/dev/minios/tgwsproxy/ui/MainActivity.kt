@@ -1,6 +1,7 @@
 package dev.minios.tgwsproxy.ui
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -33,6 +34,11 @@ import dev.minios.tgwsproxy.ui.screens.LogScreen
 import dev.minios.tgwsproxy.ui.theme.TgWsProxyTheme
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        const val ACTION_SHOW_UPDATE = "dev.minios.tgwsproxy.SHOW_UPDATE"
+    }
+
+    private var pendingUpdateOpen by mutableStateOf(false)
 
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -44,6 +50,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingUpdateOpen = savedInstanceState?.getBoolean("pending_update_open") ?: false
+        consumeUpdateIntent(intent)
 
         // Request notification permission on Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -69,7 +77,7 @@ class MainActivity : ComponentActivity() {
                 dynamicColor = config.dynamicColor,
             ) {
                 if (configLoaded) {
-                    AppNavigation(viewModel = viewModel)
+                    AppNavigation(viewModel, pendingUpdateOpen) { pendingUpdateOpen = false }
                 } else {
                     androidx.compose.foundation.layout.Box(
                         modifier = androidx.compose.ui.Modifier.fillMaxSize(),
@@ -81,10 +89,28 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        consumeUpdateIntent(intent)
+    }
+
+    private fun consumeUpdateIntent(intent: Intent?) {
+        if (intent?.action == ACTION_SHOW_UPDATE) {
+            pendingUpdateOpen = true
+            intent.action = null
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("pending_update_open", pendingUpdateOpen)
+        super.onSaveInstanceState(outState)
+    }
 }
 
 @Composable
-private fun AppNavigation(viewModel: MainViewModel) {
+private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, onUpdateOpened: () -> Unit) {
     val config by viewModel.config.collectAsState()
     val serviceState by viewModel.serviceState.collectAsState()
     val runtimeRouteMode by viewModel.runtimeRouteMode.collectAsState()
@@ -106,6 +132,14 @@ private fun AppNavigation(viewModel: MainViewModel) {
     }
 
     var currentScreen by rememberSaveable { mutableStateOf(Screen.Main) }
+    LaunchedEffect(pendingUpdateOpen, currentScreen) {
+        // Keep the current Settings draft and its normal save/restart exit path intact.
+        if (pendingUpdateOpen && currentScreen != Screen.Settings && currentScreen != Screen.Logs) {
+            viewModel.refreshCachedUpdate()
+            currentScreen = Screen.About
+            onUpdateOpened()
+        }
+    }
     if (powerProfileNoticePending) {
         AlertDialog(
             onDismissRequest = {},
@@ -165,6 +199,7 @@ private fun AppNavigation(viewModel: MainViewModel) {
                 onAppearanceChange = { appTheme, dynamicColor ->
                     viewModel.updateAppearance(appTheme, dynamicColor)
                 },
+                onStartOnBootChange = viewModel::updateStartOnBoot,
                 onOpenLogs = { currentScreen = Screen.Logs },
             )
         }

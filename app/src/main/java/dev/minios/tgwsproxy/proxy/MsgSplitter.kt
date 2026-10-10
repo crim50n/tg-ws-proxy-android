@@ -2,56 +2,34 @@ package dev.minios.tgwsproxy.proxy
 
 /**
  * MTProto message splitter for splitting TCP stream into individual WS frames.
- * Parses protocol-specific length headers through a shadow AES-CTR decryptor.
- *
- * Matches the Python MsgSplitter in bridge.py exactly:
- * - Creates a shadow decryptor from relay_init to read length headers
- * - Maintains cipher_buf (encrypted) and plain_buf (decrypted) buffers
- * - Splits stream by abridged or intermediate protocol packet boundaries
- * - Falls back to passthrough mode on unrecognized protocol
+ * Parses protocol-specific length headers from the bridge's already decrypted bytes,
+ * while preserving the corresponding encrypted bytes for upstream WS frames.
+ * Falls back to passthrough mode on unrecognized protocol.
  */
 class MsgSplitter(
     protoTag: Int,
-    relayInit: ByteArray,
 ) {
     companion object {
         internal const val MAX_PACKET_SIZE = 16 * 1024 * 1024
     }
-
-    // Shadow decryptor — same key derivation as relay encryptor,
-    // fast-forwarded past the 64-byte init (matching Python)
-    private val shadowDecryptor: AesCtr
 
     private val proto: Int = protoTag
     private var cipherBuf = ByteArray(0)
     private var plainBuf = ByteArray(0)
     private var disabled = false
 
-    init {
-        // Extract key/IV from relay_init at same positions as relay encryptor
-        val encKey = relayInit.sliceArray(
-            MtProtoConstants.SKIP_LEN until
-                    MtProtoConstants.SKIP_LEN + MtProtoConstants.PREKEY_LEN
-        )
-        val encIv = relayInit.sliceArray(
-            MtProtoConstants.SKIP_LEN + MtProtoConstants.PREKEY_LEN until
-                    MtProtoConstants.SKIP_LEN + MtProtoConstants.PREKEY_LEN + MtProtoConstants.IV_LEN
-        )
-        shadowDecryptor = AesCtr(encKey, encIv)
-        // Fast-forward past 64-byte init (matching Python: self._dec.update(ZERO_64))
-        shadowDecryptor.update(ByteArray(MtProtoConstants.HANDSHAKE_LEN))
-    }
-
     /**
      * Split encrypted data into individual MTProto transport packets.
+     * Plain bytes must correspond byte-for-byte to the encrypted chunk.
      * Each returned ByteArray is a complete packet to be sent as a WS frame.
      */
-    fun split(chunk: ByteArray): List<ByteArray> {
+    fun split(chunk: ByteArray, plain: ByteArray): List<ByteArray> {
+        require(chunk.size == plain.size) { "MTProto splitter chunks must have equal lengths" }
         if (chunk.isEmpty()) return emptyList()
         if (disabled) return listOf(chunk)
 
         cipherBuf = append(cipherBuf, chunk)
-        plainBuf = append(plainBuf, shadowDecryptor.update(chunk))
+        plainBuf = append(plainBuf, plain)
 
         val parts = mutableListOf<ByteArray>()
         var offset = 0

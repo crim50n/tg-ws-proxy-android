@@ -42,6 +42,7 @@ class TgWsProxyServer(
     private val clientJobs = ConcurrentHashMap.newKeySet<Job>()
     private val clientSockets = ConcurrentHashMap.newKeySet<Socket>()
     private val activeUpstreams = ConcurrentHashMap.newKeySet<Bridge.UpstreamConnection>()
+    private val tcpFallback = TcpFallbackConnector()
 
     val isRunning: Boolean get() = listening.get()
 
@@ -52,8 +53,10 @@ class TgWsProxyServer(
         wsPool?.updateRedirects(newConfig.dcRedirects)
     }
 
+    @Synchronized
     fun onNetworkChanged() {
         if (!isRunning) return
+        tcpFallback.reset(enabled = running.get() && !stopRequested.get())
         Log.i(TAG, "Network changed, rebuilding WebSocket pool")
         Bridge.resetState()
         wsPool?.resetAndWarm(directWarmupRedirects())
@@ -214,6 +217,7 @@ class TgWsProxyServer(
         statsJob = null
         wsPool?.stop()
         wsPool = null
+        tcpFallback.reset(enabled = false)
 
         try {
             serverSocket?.close()
@@ -360,6 +364,7 @@ class TgWsProxyServer(
                 pool = wsPool,
                 protoTag = handshake.protoTag,
                 relayInit = relayInit.initPacket,
+                tcpFallback = tcpFallback,
             )
             activeUpstreams.add(upstream)
             DiagnosticLogger.event(

@@ -73,6 +73,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         DiagnosticLogger.initialize(application)
         checkForUpdates(manual = false)
+        viewModelScope.launch {
+            UpdateRepository.changes.collect { refreshCachedUpdate() }
+        }
         // Monitor service state
         viewModelScope.launch {
             while (isActive) {
@@ -99,6 +102,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissPowerProfileNotice() {
         viewModelScope.launch { configRepo.dismissPowerProfileNotice() }
+    }
+
+    fun updateStartOnBoot(enabled: Boolean) {
+        viewModelScope.launch { configRepo.saveStartOnBoot(enabled) }
     }
 
     fun saveConfig(newConfig: ProxyConfig) {
@@ -143,7 +150,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val cachedAvailable = _updateState.value as? UpdateState.Available
         if (manual) _updateState.value = UpdateState.Checking
         viewModelScope.launch {
-            updateRepository.check().fold(
+            val result = if (manual) updateRepository.check() else updateRepository.checkIfDue()
+            result?.fold(
                 onSuccess = { manifest ->
                     val updateAvailable = UpdatePolicy.isAvailable(
                         BuildConfig.VERSION_CODE,
@@ -168,6 +176,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     DiagnosticLogger.failure("update_check_failed", error)
                 },
             )
+        }
+    }
+
+    fun refreshCachedUpdate() {
+        if (_updateState.value !is UpdateState.Downloading && _updateState.value !is UpdateState.Checking) {
+            _updateState.value = updateRepository.cachedState()
         }
     }
 

@@ -27,6 +27,7 @@ data class ProxyConfig(
     val routeProbesEnabled: Boolean = false,
     val cfDomainRefreshEnabled: Boolean = false,
     val webSocketPingIntervalSeconds: Int = 180,
+    val startOnBoot: Boolean = false,
     val showTrafficInNotification: Boolean = true,
     val cfProxyUserDomain: String = "",
     val showDetailedStats: Boolean = false,

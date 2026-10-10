@@ -36,6 +36,7 @@ fun SettingsScreen(
     onCopySecret: (String) -> Unit,
     onTestCfProxy: () -> Unit,
     onAppearanceChange: (String, Boolean) -> Unit,
+    onStartOnBootChange: (Boolean) -> Unit,
     onOpenLogs: () -> Unit,
 ) {
     var host by remember { mutableStateOf(config.host) }
@@ -51,6 +52,7 @@ fun SettingsScreen(
     var routeProbesEnabled by remember { mutableStateOf(config.routeProbesEnabled) }
     var cfDomainRefreshEnabled by remember { mutableStateOf(config.cfDomainRefreshEnabled) }
     var webSocketPingIntervalSeconds by remember { mutableIntStateOf(config.webSocketPingIntervalSeconds) }
+    var startOnBoot by rememberSaveable { mutableStateOf(config.startOnBoot) }
     var showTrafficInNotification by remember { mutableStateOf(config.showTrafficInNotification) }
     var cfDomain by remember { mutableStateOf(config.cfProxyUserDomain) }
     var useCfDomain by remember { mutableStateOf(config.cfProxyUserDomain.isNotBlank()) }
@@ -60,6 +62,10 @@ fun SettingsScreen(
     var appTheme by remember { mutableStateOf(config.appTheme) }
     var dynamicColor by remember { mutableStateOf(config.dynamicColor) }
     var regenerateSecretDialogVisible by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(config.startOnBoot) {
+        startOnBoot = config.startOnBoot
+    }
 
     // Validation error states.
     var hostError by remember { mutableStateOf<String?>(null) }
@@ -121,6 +127,7 @@ fun SettingsScreen(
             routeProbesEnabled = routeProbesEnabled,
             cfDomainRefreshEnabled = cfDomainRefreshEnabled,
             webSocketPingIntervalSeconds = webSocketPingIntervalSeconds,
+            startOnBoot = startOnBoot,
             showTrafficInNotification = showTrafficInNotification,
             cfProxyUserDomain = if (useCfDomain) normalizedCfDomain else "",
             showDetailedStats = showDetailedStats,
@@ -143,6 +150,7 @@ fun SettingsScreen(
         routeProbesEnabled,
         cfDomainRefreshEnabled,
         webSocketPingIntervalSeconds,
+        startOnBoot,
         showTrafficInNotification,
         cfDomain,
         useCfDomain,
@@ -521,6 +529,16 @@ fun SettingsScreen(
                 description = stringResource(R.string.settings_keep_cpu_awake_desc),
                 checked = keepCpuAwake,
                 onCheckedChange = { keepCpuAwake = it },
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            SettingsSwitchRow(
+                title = stringResource(R.string.settings_start_on_boot),
+                description = stringResource(R.string.settings_start_on_boot_desc),
+                checked = startOnBoot,
+                onCheckedChange = {
+                    startOnBoot = it
+                    onStartOnBootChange(it)
+                },
             )
             Spacer(modifier = Modifier.height(12.dp))
             SettingsSwitchRow(

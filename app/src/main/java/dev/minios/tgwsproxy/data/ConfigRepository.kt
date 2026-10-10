@@ -81,6 +81,7 @@ class ConfigRepository(private val context: Context) {
         val ROUTE_PROBES_ENABLED = booleanPreferencesKey("route_probes_enabled")
         val CF_DOMAIN_REFRESH_ENABLED = booleanPreferencesKey("cf_domain_refresh_enabled")
         val WS_PING_INTERVAL_SECONDS = intPreferencesKey("ws_ping_interval_seconds")
+        val START_ON_BOOT = booleanPreferencesKey("start_on_boot")
         val SHOW_TRAFFIC_IN_NOTIFICATION = booleanPreferencesKey("show_traffic_in_notification")
         val CF_PROXY_USER_DOMAIN = stringPreferencesKey("cf_proxy_user_domain")
         val SHOW_DETAILED_STATS = booleanPreferencesKey("show_detailed_stats")
@@ -168,6 +169,7 @@ class ConfigRepository(private val context: Context) {
             routeProbesEnabled = prefs[Keys.ROUTE_PROBES_ENABLED] ?: false,
             cfDomainRefreshEnabled = prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] ?: false,
             webSocketPingIntervalSeconds = (prefs[Keys.WS_PING_INTERVAL_SECONDS] ?: 180).coerceIn(30, 300),
+            startOnBoot = prefs[Keys.START_ON_BOOT] ?: false,
             showTrafficInNotification = prefs[Keys.SHOW_TRAFFIC_IN_NOTIFICATION] ?: true,
             cfProxyUserDomain = prefs[Keys.CF_PROXY_USER_DOMAIN]
                 ?.trim()
@@ -214,6 +216,7 @@ class ConfigRepository(private val context: Context) {
             prefs[Keys.ROUTE_PROBES_ENABLED] = config.routeProbesEnabled
             prefs[Keys.CF_DOMAIN_REFRESH_ENABLED] = config.cfDomainRefreshEnabled
             prefs[Keys.WS_PING_INTERVAL_SECONDS] = config.webSocketPingIntervalSeconds.coerceIn(30, 300)
+            // Start-on-boot is saved immediately by saveStartOnBoot(), outside UI debounce.
             prefs[Keys.SHOW_TRAFFIC_IN_NOTIFICATION] = config.showTrafficInNotification
             prefs[Keys.CF_PROXY_USER_DOMAIN] = config.cfProxyUserDomain
             prefs[Keys.SHOW_DETAILED_STATS] = config.showDetailedStats
@@ -227,6 +230,10 @@ class ConfigRepository(private val context: Context) {
             prefs[Keys.APP_THEME] = appTheme
             prefs[Keys.DYNAMIC_COLOR] = dynamicColor
         }
+    }
+
+    suspend fun saveStartOnBoot(enabled: Boolean) {
+        context.dataStore.edit { prefs -> prefs[Keys.START_ON_BOOT] = enabled }
     }
 
     private fun serializeDcRedirects(redirects: Map<Int, String>): String {

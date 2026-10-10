@@ -23,6 +23,7 @@ object MtProtoConstants {
         "HEAD".toByteArray(),
         "POST".toByteArray(),
         "GET ".toByteArray(),
+        "OPTI".toByteArray(),
         byteArrayOf(0xEE.toByte(), 0xEE.toByte(), 0xEE.toByte(), 0xEE.toByte()),
         byteArrayOf(0xDD.toByte(), 0xDD.toByte(), 0xDD.toByte(), 0xDD.toByte()),
         byteArrayOf(0x16, 0x03, 0x01, 0x02),
@@ -50,7 +51,7 @@ object MtProtoConstants {
         return if (isMedia) {
             listOf("kws${wsDc}-1.web.telegram.org", "kws${wsDc}.web.telegram.org")
         } else {
-            listOf("kws${wsDc}.web.telegram.org", "kws${wsDc}-1.web.telegram.org")
+            listOf("kws${wsDc}.web.telegram.org")
         }
     }
 

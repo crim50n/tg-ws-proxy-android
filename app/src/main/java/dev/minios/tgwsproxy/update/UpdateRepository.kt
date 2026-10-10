@@ -3,16 +3,33 @@ package dev.minios.tgwsproxy.update
 import android.content.Context
 import dev.minios.tgwsproxy.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.Response
+import java.io.IOException
 import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.resumeWithException
 
 private const val RELEASE_API_URL =
     "https://api.github.com/repos/crim50n/tg-ws-proxy-android/releases/latest"
@@ -103,6 +120,20 @@ object UpdateValidator {
 }
 
 object UpdatePolicy {
+    internal fun checkDelayMs(now: Long, lastAttempt: Long): Long {
+        if (lastAttempt <= 0 || now < lastAttempt) return 0
+        return (CHECK_INTERVAL_MS - (now - lastAttempt)).coerceAtLeast(0)
+    }
+
+    internal fun shouldNotify(
+        serviceRunning: Boolean,
+        currentVersionCode: Int,
+        currentVersionName: String,
+        release: UpdateInfo,
+        lastNotifiedVersion: String?,
+    ): Boolean = serviceRunning && release.versionName != lastNotifiedVersion &&
+        isAvailable(currentVersionCode, currentVersionName, release)
+
     fun isAvailable(
         currentVersionCode: Int,
         currentVersionName: String,
@@ -115,6 +146,12 @@ object UpdatePolicy {
 }
 
 class UpdateRepository(context: Context) {
+    companion object {
+        private val _changes = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+        internal val changes = _changes.asSharedFlow()
+        private val checkMutex = Mutex()
+    }
+
     private val preferences = context.applicationContext.getSharedPreferences(
         "update_check",
         Context.MODE_PRIVATE,
@@ -145,23 +182,44 @@ class UpdateRepository(context: Context) {
     }
 
     fun shouldCheck(): Boolean {
-        val lastAttempt = preferences.getLong("last_attempt", 0L)
-        return System.currentTimeMillis() - lastAttempt >= CHECK_INTERVAL_MS
+        return timeUntilNextCheckMs() == 0L
     }
 
-    suspend fun check(): Result<UpdateInfo> = withContext(Dispatchers.IO) {
+    fun timeUntilNextCheckMs(): Long = UpdatePolicy.checkDelayMs(
+        System.currentTimeMillis(), preferences.getLong("last_attempt", 0L),
+    )
+
+    fun lastNotifiedVersion(): String? = preferences.getString("last_notified_version", null)
+
+    fun markNotified(release: UpdateInfo) {
+        preferences.edit().putString("last_notified_version", release.versionName).apply()
+    }
+
+    suspend fun check(): Result<UpdateInfo> = checkMutex.withLock { checkLocked() }
+
+    suspend fun checkIfDue(): Result<UpdateInfo>? = checkMutex.withLock {
+        if (shouldCheck()) checkLocked() else null
+    }
+
+    private suspend fun checkLocked(): Result<UpdateInfo> = withContext(Dispatchers.IO) {
         preferences.edit().putLong("last_attempt", System.currentTimeMillis()).apply()
-        runCatching {
+        try {
             val release = try {
                 fetchLatestRelease()
+            } catch (e: CancellationException) {
+                throw e
             } catch (apiError: Exception) {
+                currentCoroutineContext().ensureActive()
                 try {
                     fetchManifest()
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (manifestError: Exception) {
                     manifestError.addSuppressed(apiError)
                     throw manifestError
                 }
             }
+            currentCoroutineContext().ensureActive()
             preferences.edit()
                 .putInt("version_code", release.versionCode ?: 0)
                 .putString("version_name", release.versionName)
@@ -169,12 +227,18 @@ class UpdateRepository(context: Context) {
                 .putString("apk_url", release.apkUrl)
                 .putString("checksum_url", release.checksumUrl)
                 .apply()
-            release
+            _changes.tryEmit(Unit)
+            Result.success(release)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            Result.failure(e)
         }
     }
 
-    private fun fetchLatestRelease(): UpdateInfo {
-        executeRequest(RELEASE_API_URL, "application/vnd.github+json", githubApi = true).use { response ->
+    private suspend fun fetchLatestRelease(): UpdateInfo {
+        return createRequest(RELEASE_API_URL, "application/vnd.github+json", githubApi = true).useResponse { response ->
             if (!response.isSuccessful) error("GitHub API HTTP ${response.code}")
             val githubRelease = json.decodeFromString<GitHubRelease>(readResponse(response, MAX_API_CHARS))
             require(!githubRelease.draft && !githubRelease.prerelease) { "Invalid GitHub release" }
@@ -190,12 +254,12 @@ class UpdateRepository(context: Context) {
                 checksumUrl = checksumUrl,
             )
             require(UpdateValidator.isValid(release)) { "Invalid GitHub release metadata" }
-            return release
+            release
         }
     }
 
-    private fun fetchManifest(): UpdateInfo {
-        executeRequest(MANIFEST_URL, "application/json").use { response ->
+    private suspend fun fetchManifest(): UpdateInfo {
+        return createRequest(MANIFEST_URL, "application/json").useResponse { response ->
             if (!response.isSuccessful) error("Update manifest HTTP ${response.code}")
             val manifest = json.decodeFromString<UpdateManifest>(readResponse(response, MAX_MANIFEST_CHARS))
             val release = UpdateInfo(
@@ -206,20 +270,22 @@ class UpdateRepository(context: Context) {
                 manifest.checksumUrl,
             )
             require(UpdateValidator.isValid(release)) { "Invalid update manifest" }
-            return release
+            release
         }
     }
 
-    private fun executeRequest(url: String, accept: String, githubApi: Boolean = false) = client.newCall(
-        Request.Builder()
+    private suspend fun executeRequest(url: String, accept: String, githubApi: Boolean = false): Response =
+        createRequest(url, accept, githubApi).awaitResponse()
+
+    private fun createRequest(url: String, accept: String, githubApi: Boolean = false): Call =
+        client.newCall(Request.Builder()
             .url(url)
             .header("Accept", accept)
             .header("User-Agent", "TG-WS-Proxy/${BuildConfig.VERSION_NAME}")
             .apply {
                 if (githubApi) header("X-GitHub-Api-Version", "2022-11-28")
             }
-            .build(),
-    ).execute()
+            .build())
 
     private fun readResponse(response: okhttp3.Response, maxChars: Int): String {
         val body = response.body ?: error("Empty response")
@@ -283,6 +349,31 @@ class UpdateRepository(context: Context) {
     }
 
     private val contextCacheDir: File = context.applicationContext.cacheDir
+}
+
+internal suspend fun Call.awaitResponse(): Response = suspendCancellableCoroutine { continuation ->
+    continuation.invokeOnCancellation { cancel() }
+    enqueue(object : Callback {
+        override fun onFailure(call: Call, e: IOException) {
+            if (continuation.isActive) continuation.resumeWithException(e)
+        }
+
+        override fun onResponse(call: Call, response: Response) {
+            continuation.resume(response) { _, discarded, _ -> discarded.close() }
+        }
+    })
+}
+
+internal suspend fun <T> Call.useResponse(block: (Response) -> T): T = coroutineScope {
+    // Keep cancellation attached while the bounded metadata body is being read on IO.
+    val monitor = launch(Dispatchers.Default, start = CoroutineStart.UNDISPATCHED) {
+        try { awaitCancellation() } finally { this@useResponse.cancel() }
+    }
+    try {
+        awaitResponse().use(block)
+    } finally {
+        monitor.cancel()
+    }
 }
 
 internal fun parseSha256(value: String): String {

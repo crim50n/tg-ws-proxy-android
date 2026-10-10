@@ -2,11 +2,11 @@ package dev.minios.tgwsproxy.proxy
 
 import android.util.Log
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
+import dev.minios.tgwsproxy.diagnostics.DiagnosticRedactor
 import kotlinx.coroutines.*
 import kotlinx.coroutines.selects.select
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
@@ -77,7 +77,6 @@ object Bridge {
     private const val DC_FAIL_COOLDOWN_MS = 30_000L
     private const val WS_FAIL_TIMEOUT_MS = 2_000
     private const val WS_NORMAL_TIMEOUT_MS = 10_000
-    private const val TCP_CONNECT_TIMEOUT_MS = 10_000
     private const val DIRECT_IP_FAIL_COOLDOWN_MS = 60 * 60_000L
     private const val CF_FALLBACK_PARALLELISM = 2
 
@@ -132,13 +131,14 @@ object Bridge {
      *
      * #1 FIX: Removed outer domain loop — connectToDc() handles domain iteration internally.
      */
-    suspend fun connectUpstream(
+    internal suspend fun connectUpstream(
         dc: Int,
         isMedia: Boolean,
         config: ProxyConfig,
         pool: WsPool?,
         protoTag: Int,
         relayInit: ByteArray,
+        tcpFallback: TcpFallbackConnector,
     ): UpstreamConnection = withContext(Dispatchers.IO) {
         val attemptStartedAt = System.currentTimeMillis()
         val mediaTag = if (isMedia) " media" else ""
@@ -170,7 +170,7 @@ object Bridge {
             } else {
                 Log.i(TAG, "DC$dc$mediaTag WS blacklisted -> fallback")
             }
-            val conn = doFallback(dc, isMedia, config, protoTag, relayInit, allowCf = !cfAttempted)
+            val conn = doFallback(dc, isMedia, config, protoTag, relayInit, tcpFallback, allowCf = !cfAttempted)
             if (conn != null) return@withContext conn
             throw ProxyException("DC$dc$mediaTag no fallback available")
         }
@@ -180,7 +180,7 @@ object Bridge {
         val ipFailUntil = directIpFailUntil[targetIp] ?: 0L
         if (config.cfProxyEnabled && now < ipFailUntil) {
             Log.i(TAG, "Direct WS IP $targetIp is cooling down -> fallback")
-            val conn = doFallback(dc, isMedia, config, protoTag, relayInit, allowCf = !cfAttempted)
+            val conn = doFallback(dc, isMedia, config, protoTag, relayInit, tcpFallback, allowCf = !cfAttempted)
             if (conn != null) return@withContext conn
         }
         val failUntil = dcFailUntil[dcKey] ?: 0L
@@ -294,7 +294,7 @@ object Bridge {
         }
 
         // 3. Fallback (CF proxy / TCP)
-        val conn = doFallback(dc, isMedia, config, protoTag, relayInit, allowCf = !cfAttempted)
+        val conn = doFallback(dc, isMedia, config, protoTag, relayInit, tcpFallback, allowCf = !cfAttempted)
         if (conn != null) return@withContext conn
 
         throw ProxyException("All upstream connection attempts failed for DC $dc")
@@ -310,6 +310,7 @@ object Bridge {
         config: ProxyConfig,
         protoTag: Int,
         relayInit: ByteArray,
+        tcpFallback: TcpFallbackConnector,
         allowCf: Boolean = true,
     ): UpstreamConnection? {
         val mediaTag = if (isMedia) " media" else ""
@@ -338,7 +339,7 @@ object Bridge {
                     if (fallbackIp != null) {
                         DiagnosticLogger.event("upstream_attempt", "dc" to dc, "media" to isMedia, "route" to "tcp")
                         Log.i(TAG, "DC$dc$mediaTag -> TCP fallback to $fallbackIp:443")
-                        val conn = tryTcpDirect(dc, fallbackIp, config.bufferSize)
+                        val conn = tryTcpDirect(dc, fallbackIp, config.bufferSize, relayInit, tcpFallback)
                         if (conn != null) return conn
                     }
                 }
@@ -414,9 +415,9 @@ object Bridge {
         } catch (e: Exception) {
             if (e is WsHandshakeError && e.statusCode == 429) {
                 val delay = cfCooldowns.markRateLimited(baseDomain)
-                Log.w(TAG, "CF proxy $baseDomain cooling down for ${delay / 1000}s after HTTP 429")
+                Log.w(TAG, "CF proxy ${DiagnosticRedactor.field("domain", baseDomain)} cooling down for ${delay / 1000}s after HTTP 429")
             }
-            Log.w(TAG, "DC$dc$mediaTag CF proxy via $baseDomain failed: ${e.message}")
+            Log.w(TAG, "DC$dc$mediaTag CF proxy via ${DiagnosticRedactor.field("domain", baseDomain)} failed: ${cfTransportErrorForLog(e)}")
             DiagnosticLogger.failure(
                 "upstream_attempt_failed",
                 e,
@@ -440,17 +441,22 @@ object Bridge {
         return UpstreamConnection(UpstreamType.CFPROXY, ws = ws)
     }
 
-    private fun tryTcpDirect(dc: Int, ip: String, bufferSize: Int): UpstreamConnection? {
+    private suspend fun tryTcpDirect(
+        dc: Int,
+        ip: String,
+        bufferSize: Int,
+        relayInit: ByteArray,
+        tcpFallback: TcpFallbackConnector,
+    ): UpstreamConnection? {
+        val context = currentCoroutineContext()
         return try {
-            val socket = Socket()
-            socket.tcpNoDelay = true
-            socket.keepAlive = true
-            socket.sendBufferSize = bufferSize
-            socket.receiveBufferSize = bufferSize
-            socket.connect(InetSocketAddress(ip, 443), TCP_CONNECT_TIMEOUT_MS)
+            val socket = tcpFallback.connect(ip, 443, bufferSize, relayInit) { context.isActive }
+                ?: return null
             ProxyStats.connectionsTcpFallback.incrementAndGet()
             DiagnosticLogger.event("upstream_route_ready", "dc" to dc, "route" to "tcp")
             UpstreamConnection(UpstreamType.TCP, tcpSocket = socket)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "TCP direct to DC $dc ($ip) failed: ${e.message}")
             DiagnosticLogger.failure("upstream_attempt_failed", e, "dc" to dc, "route" to "tcp")
@@ -523,22 +529,12 @@ object Bridge {
             UpstreamType.WEBSOCKET, UpstreamType.CFPROXY -> {
                 upstream.ws!!.sendBinary(relayInit)
             }
-            UpstreamType.TCP -> {
-                upstream.tcpSocket!!.getOutputStream().apply {
-                    write(relayInit)
-                    flush()
-                }
-            }
+            UpstreamType.TCP -> Unit // TCP setup has already sent relayInit.
         }
 
-        // Create MsgSplitter for WS upstream (matching Python behavior)
+        // Reuse decrypted client bytes for WS packet boundaries.
         val splitter: MsgSplitter? = if (upstream.type != UpstreamType.TCP) {
-            try {
-                MsgSplitter(protoTag, relayInit)
-            } catch (e: Exception) {
-                Log.w(TAG, "MsgSplitter init failed: ${e.message}")
-                null
-            }
+            MsgSplitter(protoTag)
         } else null
 
         // Cache the TCP output stream for the session.
@@ -631,7 +627,7 @@ object Bridge {
                     when (upstream.type) {
                         UpstreamType.WEBSOCKET, UpstreamType.CFPROXY -> {
                             if (splitter != null) {
-                                val parts = splitter.split(reencrypted)
+                                val parts = splitter.split(reencrypted, decrypted)
                                 if (parts.isEmpty()) continue
                                 if (upstream.type == UpstreamType.WEBSOCKET) markDirectRequest(read)
                                 if (parts.size > 1) {
@@ -651,7 +647,7 @@ object Bridge {
                     }
                 }
             } catch (e: Exception) {
-                if (TgWsProxyServer.globalVerbose) Log.d(TAG, "Client->upstream ended: ${e.message}")
+                if (TgWsProxyServer.globalVerbose) Log.d(TAG, "Client->upstream ended: ${if (upstream.type == UpstreamType.CFPROXY) cfTransportErrorForLog(e) else e.message}")
             }
         }
 
@@ -696,7 +692,7 @@ object Bridge {
                     }
                 }
             } catch (e: Exception) {
-                if (TgWsProxyServer.globalVerbose) Log.d(TAG, "Upstream->client ended: ${e.message}")
+                if (TgWsProxyServer.globalVerbose) Log.d(TAG, "Upstream->client ended: ${if (upstream.type == UpstreamType.CFPROXY) cfTransportErrorForLog(e) else e.message}")
             }
         }
 
@@ -751,6 +747,12 @@ object Bridge {
         } catch (_: Exception) {
         }
     }
+}
+
+// Exception messages can contain private endpoint paths that hostname redaction cannot hide.
+internal fun cfTransportErrorForLog(error: Exception): String {
+    val type = DiagnosticRedactor.field("message", error.javaClass.simpleName)
+    return if (error is WsHandshakeError) "$type (HTTP ${error.statusCode})" else type
 }
 
 internal fun closeBridgeEndpoints(closeClient: () -> Unit, closeUpstream: () -> Unit) {

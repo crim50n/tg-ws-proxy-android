@@ -63,6 +63,7 @@ class RawWebSocket private constructor(
             port: Int = 443,
             connectTimeoutMs: Int = 10000,
             bufferSize: Int = 256 * 1024,
+            onSocketCreated: ((SSLSocket) -> Unit)? = null,
         ): RawWebSocket {
             // Reuse global TLS context (matching Python's module-level ssl.SSLContext)
             val factory = globalSslContext.socketFactory
@@ -70,6 +71,7 @@ class RawWebSocket private constructor(
             val socket = factory.createSocket() as SSLSocket
             val clampedTimeout = connectTimeoutMs.coerceIn(1, 10000)
             try {
+                onSocketCreated?.invoke(socket)
                 socket.tcpNoDelay = true
                 socket.keepAlive = true
                 socket.sendBufferSize = bufferSize
@@ -357,6 +359,12 @@ class RawWebSocket private constructor(
     }
 
     fun isClosed(): Boolean = closed || socket.isClosed
+
+    // Idle pool disposal must not block trying to send a CLOSE on a dead route.
+    internal fun abort() {
+        closed = true
+        try { socket.close() } catch (_: Exception) {}
+    }
 
     /**
      * Check if the socket output is shut down (mid-close state).

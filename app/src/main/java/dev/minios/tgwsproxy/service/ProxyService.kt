@@ -1,6 +1,8 @@
 package dev.minios.tgwsproxy.service
 
 import android.annotation.SuppressLint
+import android.Manifest
+import android.content.pm.PackageManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -23,6 +25,11 @@ import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import dev.minios.tgwsproxy.R
+import dev.minios.tgwsproxy.BuildConfig
+import dev.minios.tgwsproxy.update.UpdateInfo
+import dev.minios.tgwsproxy.update.UpdatePolicy
+import dev.minios.tgwsproxy.update.UpdateRepository
+import dev.minios.tgwsproxy.update.UpdateState
 import dev.minios.tgwsproxy.data.ConfigRepository
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import dev.minios.tgwsproxy.diagnostics.ConnectionAdvice
@@ -45,8 +52,10 @@ import dev.minios.tgwsproxy.ui.MainActivity
 private const val TAG = "ProxyService"
 private const val CHANNEL_ID = "tg_ws_proxy_service"
 private const val ADVICE_CHANNEL_ID = "connection_recommendations"
+private const val UPDATE_CHANNEL_ID = "app_updates"
 private const val NOTIFICATION_ID = 1
 private const val ADVICE_NOTIFICATION_ID = 2
+private const val UPDATE_NOTIFICATION_ID = 3
 private const val ACTION_STOP = "dev.minios.tgwsproxy.STOP"
 private const val ACTION_RESTART = "dev.minios.tgwsproxy.RESTART"
 private const val ACTION_RESTORE_NOTIFICATION = "dev.minios.tgwsproxy.RESTORE_NOTIFICATION"
@@ -61,6 +70,8 @@ enum class ProxyServiceState { STOPPED, STARTING, RUNNING, RESTARTING, STOPPING 
 internal val ProxyServiceState.acceptsStart: Boolean get() = this == ProxyServiceState.STOPPED
 internal val ProxyServiceState.acceptsRestart: Boolean
     get() = this == ProxyServiceState.STARTING || this == ProxyServiceState.RUNNING
+internal val ProxyServiceState.keepsUpdateNotification: Boolean
+    get() = this == ProxyServiceState.RESTARTING
 
 /**
  * Foreground service that runs the MTProto proxy server.
@@ -84,6 +95,8 @@ class ProxyService : Service() {
     private var restartJob: Job? = null
     private var stopJob: Job? = null
     private var notificationUpdateJob: Job? = null
+    private var updateCheckJob: Job? = null
+    private lateinit var updateRepository: UpdateRepository
     private var routeProbeJob: Job? = null
     private var networkChangeJob: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
@@ -139,6 +152,7 @@ class ProxyService : Service() {
         DiagnosticLogger.initialize(applicationContext)
         DiagnosticLogger.event("service_created")
         notificationManager = getSystemService(NotificationManager::class.java)
+        updateRepository = UpdateRepository(applicationContext)
         TgWsProxyServer.globalVerbose = dev.minios.tgwsproxy.BuildConfig.DEBUG
         createNotificationChannel()
         Log.i(TAG, "Service created")
@@ -278,6 +292,7 @@ class ProxyService : Service() {
                         _startFailure.value = null
                         updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
                         if (config.routeProbesEnabled) startRouteProbe(config, runtimeId)
+                        startUpdateChecks(runtimeId)
                     }
                 }
 
@@ -317,6 +332,7 @@ class ProxyService : Service() {
                     if (activeRuntimeId == runtimeId) {
                         activeRuntimeId = 0L
                         stopNotificationUpdates()
+                        stopUpdateChecks()
                         stopRouteProbe()
                         unregisterNetworkCallback()
                         CfProxyDomains.stopBackgroundRefresh()
@@ -335,6 +351,7 @@ class ProxyService : Service() {
     }
 
     private fun stopAfterRuntimeFailure() {
+        stopUpdateChecks()
         _serviceState.value = ProxyServiceState.STOPPED
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -346,6 +363,7 @@ class ProxyService : Service() {
             val id = activeRuntimeId
             val owned = server
             if (activeRuntimeId == id) activeRuntimeId = 0L
+            stopUpdateChecks(clearNotification = !_serviceState.value.keepsUpdateNotification)
             id to owned
         }
         val stopDeadline = SystemClock.elapsedRealtime() + RUNTIME_STOP_TIMEOUT_MS
@@ -404,6 +422,7 @@ class ProxyService : Service() {
                 val stopped = stopProxyRuntime()
                 if (!stopped) {
                     stopRequested = true
+                    stopUpdateChecks()
                     _serviceState.value = ProxyServiceState.STOPPED
                     withContext(Dispatchers.Main.immediate) {
                         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -429,6 +448,7 @@ class ProxyService : Service() {
     private fun requestStop() {
         if (stopRequested) return
         stopRequested = true
+        stopUpdateChecks()
         _serviceState.value = ProxyServiceState.STOPPING
         _startFailure.value = null
         DiagnosticLogger.event("service_stop_requested")
@@ -450,6 +470,7 @@ class ProxyService : Service() {
     }
 
     private fun stopProxyRuntimeNow() {
+        stopUpdateChecks()
         stopNotificationUpdates()
         stopRouteProbe()
         unregisterNetworkCallback()
@@ -617,6 +638,74 @@ class ProxyService : Service() {
         notificationUpdateJob = null
     }
 
+    private fun startUpdateChecks(runtimeId: Long) = synchronized(runtimeOwnershipLock) {
+        if (stopRequested || activeRuntimeId != runtimeId || updateCheckJob?.isActive == true) return@synchronized
+        updateCheckJob = serviceScope?.launch {
+            while (isActive) {
+                updateRepository.checkIfDue()?.onFailure {
+                    DiagnosticLogger.failure("service_update_check_failed", it)
+                }
+                ensureActive()
+                val release = (updateRepository.cachedState() as? UpdateState.Available)?.release
+                release?.let { available ->
+                    withContext(Dispatchers.Main.immediate) {
+                        synchronized(runtimeOwnershipLock) {
+                            if (isActive && !stopRequested && activeRuntimeId == runtimeId && instance === this@ProxyService) {
+                                runCatching { showUpdateNotification(available) }.onFailure {
+                                    DiagnosticLogger.failure("update_notification_failed", it)
+                                }
+                            }
+                        }
+                    }
+                }
+                delay(updateRepository.timeUntilNextCheckMs().coerceAtLeast(60_000L))
+            }
+        }
+    }
+
+    private fun stopUpdateChecks(clearNotification: Boolean = true) = synchronized(runtimeOwnershipLock) {
+        updateCheckJob?.cancel()
+        updateCheckJob = null
+        if (clearNotification && instance === this) notificationManager.cancel(UPDATE_NOTIFICATION_ID)
+    }
+
+    private fun showUpdateNotification(release: UpdateInfo) {
+        if (!UpdatePolicy.shouldNotify(
+                _serviceState.value == ProxyServiceState.RUNNING,
+                BuildConfig.VERSION_CODE,
+                BuildConfig.VERSION_NAME,
+                release,
+                updateRepository.lastNotifiedVersion(),
+            ) || !notificationManager.areNotificationsEnabled() ||
+            notificationManager.getNotificationChannel(UPDATE_CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE
+        ) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) return
+        val openIntent = PendingIntent.getActivity(
+            this, 5,
+            Intent(this, MainActivity::class.java).apply {
+                action = MainActivity.ACTION_SHOW_UPDATE
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        notificationManager.notify(
+            UPDATE_NOTIFICATION_ID,
+            Notification.Builder(this, UPDATE_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_tile)
+                .setContentTitle(getString(R.string.update_available_title))
+                .setContentText(getString(R.string.update_available_version, release.versionName))
+                .setContentIntent(openIntent)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setCategory(Notification.CATEGORY_STATUS)
+                .build(),
+        )
+        updateRepository.markNotified(release)
+        DiagnosticLogger.event("update_notification_shown", "version" to release.versionName)
+    }
+
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CHANNEL_ID,
@@ -635,6 +724,16 @@ class ProxyService : Service() {
                 NotificationManager.IMPORTANCE_DEFAULT,
             ).apply {
                 description = getString(R.string.notification_advice_channel_desc)
+            }
+        )
+        nm.createNotificationChannel(
+            NotificationChannel(
+                UPDATE_CHANNEL_ID,
+                getString(R.string.notification_update_channel_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = getString(R.string.notification_update_channel_desc)
+                setShowBadge(false)
             }
         )
     }

@@ -41,6 +41,9 @@ require root, an external proxy server, an account, analytics, or ads.
 3. Tap **Open in Telegram**, or copy the generated `tg://proxy` link.
 4. Confirm the MTProto proxy in Telegram.
 
+Optional startup after device boot is available in Settings and is disabled by
+default. Android and device-vendor background restrictions can affect delivery.
+
 The default listener is local-only. Binding to `0.0.0.0` exposes the proxy to
 the local network; clients still need the generated secret.
 
@@ -65,6 +68,10 @@ show all manual routing, server, buffer, and pool controls.
 
 Settings are saved automatically. Leaving Settings restarts a running proxy
 only when effective connection settings changed.
+
+Prepared connections are disabled by the default power profile, regardless of the
+configured pool size. When enabled, idle sockets rotate at expiration and failed
+refills retry with backoff; there is no periodic pool polling loop.
 
 ### Automatic Connection Mode
 
@@ -106,11 +113,10 @@ the proxy because of it.
 
 ### Diagnostics
 
-The Connection log always keeps the latest 300 redacted events in memory. It
-does not continuously write them to storage. Start a diagnostic report
-explicitly to record up to five minutes for export. Reports redact proxy links,
-secrets, IPv4 addresses, and IPv6 addresses. Deleting a saved report does not
-clear the in-memory events shown on screen.
+Diagnostics are always collected using a bounded queue and a separate writer.
+The Connection log shows the latest 300 redacted events. Stored logs rotate and
+retain entries for seven days. Exports use separate immutable files and redact
+proxy links, secrets, addresses, and private endpoint fields.
 
 ## Update Checks
 
@@ -119,15 +125,16 @@ hours. If the API is unavailable or rate-limited, it falls back to
 [`update.json`](update.json) from the `master` branch. A manual check is also
 available on the About screen.
 
-For compatibility with installations made before `update.json` was published,
-an HTTP 404 falls back to the literal `versionCode` and `versionName` assignments
-in `app/build.gradle.kts`. Other manifest errors are reported instead of being
-silently ignored.
+While the proxy service is running, it also checks for updates within the same
+24-hour interval and can show a quiet notification once per version. No update
+jobs or alarms run after the service stops. Notifications survive internal proxy
+restarts and are removed when the service stops. A notification tap opens the
+About screen without starting a download; an open Settings draft is preserved.
 
-The manifest contains only `versionCode`, `versionName`, and an HTTPS release
-page URL. The app accepts release URLs only for this repository and opens the
-page in the user's browser. It does not download or install APKs itself. Android
-continues to enforce the application signing certificate during installation.
+The manifest includes version identifiers and validated release, APK, and checksum
+URLs for this repository. Users can explicitly download a SHA-256-verified APK
+and open Android's installer, or open the release page. Android continues to
+enforce the application signing certificate during installation.
 
 For a release, update the literal version assignments in `app/build.gradle.kts`
 and the matching values and tag URL in `update.json` before publishing the tag.

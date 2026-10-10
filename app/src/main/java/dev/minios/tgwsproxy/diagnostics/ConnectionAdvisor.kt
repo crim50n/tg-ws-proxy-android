@@ -133,6 +133,7 @@ fun requiresProxyRestart(previous: ProxyConfig, updated: ProxyConfig): Boolean {
             showDetailedStats = false,
             appTheme = "system",
             dynamicColor = true,
+            startOnBoot = false,
         )
     }
     return previous.runtimeSettings() != updated.runtimeSettings()
