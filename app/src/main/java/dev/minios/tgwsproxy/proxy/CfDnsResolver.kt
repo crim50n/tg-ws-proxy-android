@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import okhttp3.Dns
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetAddress
@@ -74,7 +75,7 @@ private fun isIpv4Address(value: String): Boolean {
     }
 }
 
-internal object CfDnsResolver {
+internal class CfDnsResolver(callFactory: Call.Factory? = null) {
     private data class CachedAddress(val address: String, val expiresAt: Long)
     private data class Endpoint(val url: String, val host: String)
 
@@ -87,7 +88,9 @@ internal object CfDnsResolver {
         "dns.google" to listOf(byteArrayOf(8, 8, 8, 8), byteArrayOf(8, 8, 4, 4)),
     )
     private val cache = ConcurrentHashMap<String, CachedAddress>()
-    private val resolveLock = Any()
+    private val stateLock = Any()
+    private var resolveLock = Any()
+    private var generation = 0L
     private val outageCooldown = DnsOutageCooldown(
         durationMs = RESOLVER_COOLDOWN_MS,
         probeIntervalMs = SYSTEM_DNS_PROBE_INTERVAL_MS,
@@ -98,7 +101,7 @@ internal object CfDnsResolver {
                 ?: Dns.SYSTEM.lookup(hostname)
         }
     }
-    private val client = OkHttpClient.Builder()
+    private val client = callFactory ?: OkHttpClient.Builder()
         .dns(bootstrapDns)
         .connectTimeout(2, TimeUnit.SECONDS)
         .readTimeout(2, TimeUnit.SECONDS)
@@ -112,7 +115,10 @@ internal object CfDnsResolver {
         return null
     }
 
-    fun reset() {
+    fun reset() = synchronized(stateLock) {
+        generation++
+        // New epochs must not wait for an old, potentially blocked DoH request.
+        resolveLock = Any()
         cache.clear()
         outageCooldown.reset()
     }
@@ -123,28 +129,62 @@ internal object CfDnsResolver {
 
     fun markAvailable() = outageCooldown.reset()
 
-    fun resolve(hostname: String): String? {
-        cached(hostname)?.let { return it }
-        if (outageCooldown.isBlocked()) return null
-        return synchronized(resolveLock) {
+    fun resolve(
+        hostname: String,
+        connectivity: ConnectivityTracker? = null,
+        epoch: Long = connectivity?.state?.value?.epoch ?: 0L,
+    ): String? {
+        val (startedGeneration, lock) = synchronized(stateLock) { generation to resolveLock }
+        fun isCurrent(): Boolean = (connectivity?.isCurrent(epoch) != false) &&
+            synchronized(stateLock) { generation == startedGeneration }
+        fun publish(requireInternet: Boolean = false, action: () -> Unit): Boolean {
+            var published = false
+            val guarded: () -> Unit = {
+                synchronized(stateLock) {
+                    if (generation == startedGeneration) {
+                        action()
+                        published = true
+                    }
+                }
+            }
+            if (connectivity == null && !requireInternet) guarded()
+            else if (connectivity == null) return false
+            else connectivity.recordIfCurrent(epoch, requireInternet, guarded)
+            return published
+        }
+        if (!isCurrent()) return null
+        return synchronized(lock) {
+            if (!isCurrent()) return@synchronized null
             cached(hostname)?.let { return@synchronized it }
-            if (outageCooldown.isBlocked()) return@synchronized null
+            if ((connectivity == null || connectivity.state.value.internetConfirmed) &&
+                outageCooldown.isBlocked()) return@synchronized null
             val encodedHost = URLEncoder.encode(hostname, Charsets.UTF_8.name())
             var resolverReachable = false
             for (endpoint in endpoints) {
+                if (!isCurrent()) return@synchronized null
                 val request = Request.Builder()
                     .url("${endpoint.url}?name=$encodedHost&type=A")
                     .header("Accept", "application/dns-json")
                     .build()
-                val answer = runCatching {
-                    client.newCall(request).execute().use { response ->
-                        resolverReachable = true
-                        if (!response.isSuccessful) null
-                        else response.body?.string()?.let(::parseDohIpv4)
-                    }
-                }.getOrNull() ?: continue
+                val call = client.newCall(request)
+                val cancellation = AutoCloseable { call.cancel() }
+                if (connectivity?.trackResource(epoch, cancellation) == false) return@synchronized null
+                val answer = try {
+                    runCatching {
+                        call.execute().use { response ->
+                            resolverReachable = true
+                            if (!response.isSuccessful) null
+                            else response.body?.string()?.let(::parseDohIpv4)
+                        }
+                    }.getOrNull()
+                } finally {
+                    connectivity?.releaseResource(cancellation)
+                } ?: continue
                 val ttlMs = answer.ttlSeconds.coerceIn(60L, 3_600L) * 1_000L
-                cache[hostname] = CachedAddress(answer.address, System.currentTimeMillis() + ttlMs)
+                if (!publish {
+                    cache[hostname] = CachedAddress(answer.address, System.currentTimeMillis() + ttlMs)
+                    outageCooldown.reset()
+                }) return@synchronized null
                 DiagnosticLogger.event(
                     "cf_dns_fallback_ready",
                     "host" to hostname,
@@ -152,9 +192,9 @@ internal object CfDnsResolver {
                 )
                 return@synchronized answer.address
             }
+            if (!isCurrent()) return@synchronized null
             if (!resolverReachable) {
-                outageCooldown.block()
-                DiagnosticLogger.event(
+                if (publish(requireInternet = true) { outageCooldown.block() }) DiagnosticLogger.event(
                     "cf_dns_fallback_failed",
                     "host" to hostname,
                     "reason" to "resolver_unavailable",
@@ -171,6 +211,8 @@ internal object CfDnsResolver {
         }
     }
 
-    private const val RESOLVER_COOLDOWN_MS = 30_000L
-    private const val SYSTEM_DNS_PROBE_INTERVAL_MS = 5_000L
+    private companion object {
+        const val RESOLVER_COOLDOWN_MS = 30_000L
+        const val SYSTEM_DNS_PROBE_INTERVAL_MS = 5_000L
+    }
 }

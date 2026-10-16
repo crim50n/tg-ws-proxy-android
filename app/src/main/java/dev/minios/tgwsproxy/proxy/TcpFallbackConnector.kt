@@ -32,11 +32,12 @@ internal class TcpFallbackConnector(
         port: Int,
         bufferSize: Int,
         relayInit: ByteArray,
+        canRecordFailure: () -> Boolean = { true },
         isActive: () -> Boolean = { true },
     ): Socket? {
         val endpoint = Endpoint(ip, port)
         val socket = synchronized(lock) {
-            if (!enabled || endpoint in connecting ||
+            if (!enabled || !isActive() || endpoint in connecting ||
                 (failures[endpoint]?.retryAfter ?: 0L) > clock()
             ) return null
             socketFactory().also { connecting[endpoint] = it }
@@ -66,7 +67,7 @@ internal class TcpFallbackConnector(
             synchronized(lock) {
                 if (connecting[endpoint] === socket) {
                     connecting.remove(endpoint)
-                    if (e !is CancellationException && isActive()) {
+                    if (e !is CancellationException && isActive() && canRecordFailure()) {
                         val count = ((failures[endpoint]?.count ?: 0) + 1).coerceAtMost(8)
                         val delay = (30_000L shl (count - 1)).coerceAtMost(3_600_000L)
                         failures[endpoint] = Failure(count, clock() + delay)

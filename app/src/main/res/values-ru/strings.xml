@@ -20,6 +20,21 @@
     <string name="port_in_use_message">Локальный порт %1$d уже занят. Остановите использующее его приложение или выберите другой порт.</string>
     <string name="port_in_use_open_settings">Изменить порт</string>
 
+    <!-- Network status and scoped route evidence, independent of the local listener. -->
+    <string name="connectivity_blocked">Android ограничил доступ к сети.</string>
+    <string name="connectivity_wait_network_state">Проверка подключения…</string>
+    <string name="connectivity_offline">Нет сети. Ожидаем подключения.</string>
+    <string name="connectivity_checking">Подключаемся к сети…</string>
+    <string name="connectivity_captive_portal">Войдите в сеть Wi-Fi, чтобы продолжить.</string>
+    <string name="connectivity_uncertain">Доступ в интернет пока не подтверждён.</string>
+    <string name="connectivity_wait_telegram">Всё готово. Откройте Telegram.</string>
+    <string name="connectivity_working">Telegram подключён.</string>
+    <string name="connectivity_wait_data">Ожидаем ответа Telegram…</string>
+    <string name="connectivity_connecting">Подключаемся к Telegram…</string>
+    <string name="connectivity_retrying">Повторяем подключение…</string>
+    <string name="connectivity_unreachable">Не удаётся подключиться к Telegram.</string>
+    <string name="connectivity_degraded">Некоторые подключения Telegram недоступны.</string>
+
     <!-- Stats -->
     <string name="stats_connections">Соединения</string>
     <string name="stats_total">Всего</string>

@@ -82,16 +82,17 @@ validated network handover begins with this route order:
 WS -> Cloudflare -> TCP
 ```
 
-The app runs two lightweight direct WebSocket, Cloudflare, and TCP reachability
-rounds for DC 2 and DC 4. Probe results are isolated per runtime so a delayed
-result from an old network cannot change a replacement runtime. Probes do not
+When route probes are enabled, the app runs two lightweight direct WebSocket,
+Cloudflare, and TCP reachability rounds for DC 2 and DC 4. They are disabled by
+the default power profile. Results are isolated by runtime and network epoch so
+delayed observations cannot change a replacement connection. Probes do not
 contain Telegram account data and are not included in user traffic counters.
 
 Repeated direct failures with successful Cloudflare checks can temporarily
 select `Cloudflare -> WS -> TCP` for the current runtime. Any successful direct
 WebSocket observation prevents that automatic switch. Automatic decisions are
 not written to DataStore and do not overwrite manual settings. The effective
-route order is displayed on the main screen.
+route order is displayed on the main screen only when detailed statistics are enabled.
 
 Automatic mode also watches active direct WebSocket media sessions. If a media
 session sends requests without receiving data, the app closes the stalled
@@ -108,8 +109,22 @@ Automatic performance defaults are route-aware:
 
 Turn automatic connection mode off to expose every manual routing, server,
 Cloudflare domain, buffer, and pool setting. In manual mode the app may display
-or notify a recommendation, but it never applies the recommendation or restarts
-the proxy because of it.
+a recommendation in the interface, but it never applies the recommendation or
+restarts the proxy because of it.
+
+### Connection Status
+
+The main screen shows one short status with an icon and color indication. It
+distinguishes network loss, Wi-Fi sign-in, Android restrictions, unconfirmed
+internet access, and Telegram connection problems without listing technical routes.
+Material You colors are off by default; existing saved appearance choices remain.
+
+Missing Android internet validation does not automatically mean the network is
+offline: actual Telegram responses can confirm connectivity. A transport handshake
+alone is not reported as a working Telegram connection. Outage errors and old
+network results are excluded from automatic routing decisions. The local service
+keeps running while waiting for a network. No periodic internet tests or extra
+network-outage notifications are added.
 
 ### Diagnostics
 

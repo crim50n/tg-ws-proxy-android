@@ -13,7 +13,7 @@ class ProxyConfigTest {
         assertEquals(true, config.cfProxyPriority)
         assertEquals(setOf(2, 4), config.dcRedirects.keys)
         assertEquals("system", config.appTheme)
-        assertEquals(true, config.dynamicColor)
+        assertEquals(false, config.dynamicColor)
         assertEquals(true, config.autoOptimizeConnection)
         assertEquals(false, config.keepCpuAwake)
         assertEquals(false, config.preconnectWebSockets)

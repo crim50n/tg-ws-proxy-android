@@ -113,6 +113,7 @@ class MainActivity : ComponentActivity() {
 private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, onUpdateOpened: () -> Unit) {
     val config by viewModel.config.collectAsState()
     val serviceState by viewModel.serviceState.collectAsState()
+    val connectivity by viewModel.connectivityState.collectAsState()
     val runtimeRouteMode by viewModel.runtimeRouteMode.collectAsState()
     val startFailure by viewModel.startFailure.collectAsState()
     val stats by viewModel.stats.collectAsState()
@@ -168,6 +169,7 @@ private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, 
             MainScreen(
                 config = config,
                 serviceState = serviceState,
+                connectivity = connectivity,
                 runtimeRouteMode = runtimeRouteMode,
                 startFailure = startFailure,
                 stats = stats,

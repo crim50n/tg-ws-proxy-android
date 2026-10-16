@@ -12,6 +12,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
+import kotlinx.coroutines.CancellationException
 
 /**
  * Minimal RFC 6455 WebSocket client implementation for binary frames.
@@ -37,6 +38,7 @@ class RawWebSocket private constructor(
         private const val MAX_HTTP_RESPONSE_BYTES = 32 * 1024
         private const val MAX_FRAME_PAYLOAD = 16 * 1024 * 1024
         private const val WS_ACCEPT_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        private val defaultCfDnsResolver = CfDnsResolver()
 
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
@@ -85,11 +87,14 @@ class RawWebSocket private constructor(
 
                 socket.connect(InetSocketAddress(connectHost, port), clampedTimeout)
                 socket.startHandshake()
+                return finishUpgrade(socket, domain, path)
             } catch (e: Exception) {
                 try { socket.close() } catch (_: Exception) {}
                 throw e
             }
+        }
 
+        private fun finishUpgrade(socket: SSLSocket, domain: String, path: String): RawWebSocket {
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
 
@@ -108,15 +113,9 @@ class RawWebSocket private constructor(
                 append("User-Agent: $USER_AGENT\r\n")
                 append("\r\n")
             }
-            val response: String
-            try {
-                output.write(request.toByteArray())
-                output.flush()
-                response = readHttpResponse(input)
-            } catch (e: Exception) {
-                try { socket.close() } catch (_: Exception) {}
-                throw e
-            }
+            output.write(request.toByteArray())
+            output.flush()
+            val response = readHttpResponse(input)
 
             val lines = response.lineSequence().toList()
             val statusLine = lines.firstOrNull() ?: ""
@@ -126,7 +125,6 @@ class RawWebSocket private constructor(
             val statusCode = if (parts.size >= 2) parts[1].toIntOrNull() ?: 0 else 0
 
             if (statusCode != 101) {
-                socket.close()
                 // Extract Location header for redirect detection
                 val location = response.lines()
                     .firstOrNull { it.startsWith("Location:", ignoreCase = true) }
@@ -156,7 +154,6 @@ class RawWebSocket private constructor(
                 "upgrade" !in connectionTokens ||
                 expectedAccept !in headers["sec-websocket-accept"].orEmpty()
             ) {
-                socket.close()
                 throw WebSocketException("Invalid WebSocket upgrade response")
             }
 
@@ -181,6 +178,9 @@ class RawWebSocket private constructor(
             bufferSize: Int = 256 * 1024,
             cfProxyDomain: String? = null,
             connectTimeoutMs: Int = 10000,
+            onSocketCreated: ((SSLSocket) -> Unit)? = null,
+            resolveCfAddress: (String) -> String? = { defaultCfDnsResolver.resolve(it) },
+            cachedCfAddress: (String) -> String? = defaultCfDnsResolver::cached,
         ): RawWebSocket {
             val domains = if (cfProxyDomain != null) {
                 val wsDc = if (dc == 203) 2 else dc
@@ -198,13 +198,14 @@ class RawWebSocket private constructor(
                 try {
                     return connect(
                         connectHost = if (cfProxyDomain != null) {
-                            CfDnsResolver.cached(domain) ?: connectTarget
+                            cachedCfAddress(domain) ?: connectTarget
                         } else {
                             connectTarget
                         },
                         domain = domain,
                         bufferSize = bufferSize,
                         connectTimeoutMs = connectTimeoutMs,
+                        onSocketCreated = onSocketCreated,
                     )
                 } catch (e: WsHandshakeError) {
                     lastError = e
@@ -217,9 +218,10 @@ class RawWebSocket private constructor(
                     // For direct WS, stop on non-redirect handshake errors.
                     if (cfProxyDomain != null) continue else break
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     var connectionError = e
                     if (cfProxyDomain != null && e is UnknownHostException) {
-                        val resolvedAddress = CfDnsResolver.resolve(domain)
+                        val resolvedAddress = resolveCfAddress(domain)
                         if (resolvedAddress != null) {
                             try {
                                 return connect(
@@ -227,8 +229,10 @@ class RawWebSocket private constructor(
                                     domain = domain,
                                     bufferSize = bufferSize,
                                     connectTimeoutMs = connectTimeoutMs,
+                                    onSocketCreated = onSocketCreated,
                                 )
                             } catch (fallbackError: Exception) {
+                                if (fallbackError is CancellationException) throw fallbackError
                                 connectionError = fallbackError
                             }
                         }

@@ -97,12 +97,61 @@ class TcpFallbackConnectorTest {
     @Test
     fun cancellationDoesNotBackOff() {
         val sockets = mutableListOf<TestSocket>()
-        val connector = TcpFallbackConnector({ 0L }) { TestSocket().also { sockets.add(it) } }
+        var active = true
+        var cancel = true
+        val connector = TcpFallbackConnector({ 0L }) {
+            TestSocket(onConnect = { if (cancel) active = false }).also { sockets.add(it) }
+        }
         assertThrows(CancellationException::class.java) {
-            connector.connect("127.0.0.1", 443, 1024, init) { false }
+            connector.connect("127.0.0.1", 443, 1024, init, isActive = { active })
         }
         assertTrue(sockets.single().closed)
-        assertNotNull(connector.connect("127.0.0.1", 443, 1024, init))
+        active = true
+        // A different endpoint also checks cancellation at entry without creating a socket.
+        assertNull(connector.connect("127.0.0.2", 443, 1024, init, isActive = { false }))
+        assertEquals(1, sockets.size)
+        cancel = false
+        assertNotNull(connector.connect("127.0.0.1", 443, 1024, init, isActive = { active }))
+    }
+
+    @Test
+    fun unconfirmedFailureDoesNotBackOffOrIncreaseNextConfirmedBackoff() {
+        var now = 0L
+        var attempts = 0
+        val connector = TcpFallbackConnector({ now }) {
+            attempts++
+            TestSocket(onConnect = { throw IOException("unavailable") })
+        }
+        repeat(2) {
+            assertThrows(IOException::class.java) {
+                connector.connect("127.0.0.1", 443, 1024, init, canRecordFailure = { false })
+            }
+        }
+        assertEquals(2, attempts)
+        assertThrows(IOException::class.java) {
+            connector.connect("127.0.0.1", 443, 1024, init, canRecordFailure = { true })
+        }
+        assertNull(connector.connect("127.0.0.1", 443, 1024, init))
+        now = 30_000L
+        assertThrows(IOException::class.java) { connector.connect("127.0.0.1", 443, 1024, init) }
+        assertEquals(4, attempts)
+    }
+
+    @Test
+    fun failureGateIsCheckedAfterConnectFails() {
+        var confirmed = true
+        val connector = TcpFallbackConnector({ 0L }) {
+            TestSocket(onConnect = {
+                confirmed = false
+                throw IOException("network lost")
+            })
+        }
+        repeat(2) {
+            confirmed = true
+            assertThrows(IOException::class.java) {
+                connector.connect("127.0.0.1", 443, 1024, init, canRecordFailure = { confirmed })
+            }
+        }
     }
 
     @Test

@@ -1,6 +1,7 @@
 package dev.minios.tgwsproxy.proxy
 
 import android.util.Log
+import android.os.SystemClock
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import kotlinx.coroutines.*
 import java.net.BindException
@@ -22,8 +23,13 @@ private const val TAG = "TgWsProxyServer"
  * through WebSocket to Telegram data centers.
  */
 class TgWsProxyServer(
+    @Volatile
     private var config: ProxyConfig,
+    private val connectivity: ConnectivityTracker,
 ) {
+    private val bridge = Bridge(connectivity)
+    internal val configSnapshot: ProxyConfig get() = config
+    private var networkEpoch = connectivity.state.value.epoch
     private val running = AtomicBoolean(false)
     private val listening = AtomicBoolean(false)
     private val stopRequested = AtomicBoolean(false)
@@ -48,17 +54,31 @@ class TgWsProxyServer(
 
     var onStatusChange: ((Boolean) -> Unit)? = null
 
+    @Synchronized
     fun updateConfig(newConfig: ProxyConfig) {
         config = newConfig
-        wsPool?.updateRedirects(newConfig.dcRedirects)
+        wsPool?.updateRedirects(directWarmupRedirects())
     }
 
     @Synchronized
     fun onNetworkChanged() {
-        if (!isRunning) return
+        onConnectivityChanged()
+    }
+
+    @Synchronized
+    fun onConnectivityChanged() {
+        val epoch = connectivity.state.value.epoch
+        if (networkEpoch == epoch) {
+            wsPool?.updateRedirects(directWarmupRedirects())
+            return
+        }
+        networkEpoch = epoch
         tcpFallback.reset(enabled = running.get() && !stopRequested.get())
         Log.i(TAG, "Network changed, rebuilding WebSocket pool")
-        Bridge.resetState()
+        bridge.resetState()
+        activeUpstreams.forEach { it.abort() }
+        clientSockets.forEach { try { it.close() } catch (_: Exception) {} }
+        clientJobs.forEach { it.cancel() }
         wsPool?.resetAndWarm(directWarmupRedirects())
     }
 
@@ -80,7 +100,10 @@ class TgWsProxyServer(
         ProxyStats.startedAtMs = System.currentTimeMillis()
         badHandshakeCount.set(0)
         lastBadHandshakeLog = 0L
-        Bridge.resetState() // Clear WS blacklist and cooldown on restart
+        bridge.resetState() // Clear WS blacklist and cooldown on restart
+        synchronized(this@TgWsProxyServer) {
+            tcpFallback.reset(enabled = running.get() && !stopRequested.get())
+        }
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         val startupStartedAt = System.currentTimeMillis()
 
@@ -107,7 +130,43 @@ class TgWsProxyServer(
             // Initialize WS pool
             wsPool = WsPool(
                 poolSize = config.poolSize,
+                maxAgeMs = 120_000,
                 bufferSize = config.bufferSize,
+                clock = SystemClock::elapsedRealtime,
+                connector = { target, domains, onSocketCreated ->
+                    val epoch = connectivity.state.value.epoch
+                    val sockets = mutableListOf<Socket>()
+                    var ready: RawWebSocket? = null
+                    try {
+                        for (domain in domains) {
+                            if (!connectivity.isCurrent(epoch) || !connectivity.state.value.allowsBackgroundWork) break
+                            try {
+                                ready = RawWebSocket.connect(target, domain,
+                                    connectTimeoutMs = 8_000, bufferSize = config.bufferSize,
+                                    onSocketCreated = { socket ->
+                                        sockets.add(socket)
+                                        if (!connectivity.recordIfCurrent(epoch, requireInternet = true) {
+                                            connectivity.trackSocket(epoch, socket)
+                                            onSocketCreated(socket)
+                                        }) {
+                                            socket.close()
+                                            throw CancellationException("Pool connectivity changed")
+                                        }
+                                    })
+                                break
+                            } catch (e: WsHandshakeError) {
+                                if (!e.isRedirect) break
+                            }
+                        }
+                        if (!connectivity.isCurrent(epoch) || !connectivity.state.value.allowsBackgroundWork) {
+                            ready?.abort()
+                            ready = null
+                        }
+                        ready
+                    } finally {
+                        sockets.forEach(connectivity::releaseSocket)
+                    }
+                },
             ).also {
                 it.start(scope!!)
                 it.warmUp(directWarmupRedirects())
@@ -124,7 +183,7 @@ class TgWsProxyServer(
             statsJob = scope!!.launch {
                 while (isActive) {
                     delay(60_000)
-                    Log.i(TAG, "stats: ${ProxyStats.formatStats()} | ws_bl: ${Bridge.blacklistSummary()}")
+                    Log.i(TAG, "stats: ${ProxyStats.formatStats()} | ws_bl: ${bridge.blacklistSummary()}")
                 }
             }
 
@@ -147,14 +206,20 @@ class TgWsProxyServer(
                     clientSocket.sendBufferSize = config.bufferSize
                     clientSocket.receiveBufferSize = config.bufferSize
                     clientSockets.add(clientSocket)
+                    val epoch = connectivity.state.value.epoch
+                    if (!connectivity.trackSocket(epoch, clientSocket)) {
+                        clientSockets.remove(clientSocket)
+                        continue
+                    }
 
                     val job = scope!!.launch {
-                        handleClient(clientSocket)
+                        handleClient(clientSocket, epoch)
                     }
                     clientJobs.add(job)
                     job.invokeOnCompletion {
                         clientJobs.remove(job)
                         clientSockets.remove(clientSocket)
+                        connectivity.releaseSocket(clientSocket)
                     }
                 } catch (e: Exception) {
                     if (running.get()) {
@@ -218,6 +283,7 @@ class TgWsProxyServer(
         wsPool?.stop()
         wsPool = null
         tcpFallback.reset(enabled = false)
+        bridge.resetState()
 
         try {
             serverSocket?.close()
@@ -226,7 +292,7 @@ class TgWsProxyServer(
 
         // Closing sockets interrupts blocking Java reads before coroutine cancellation.
         activeUpstreams.forEach { upstream ->
-            try { upstream.close() } catch (_: Exception) {}
+            try { upstream.abort() } catch (_: Exception) {}
         }
         scope?.cancel()
         if (clientJobs.isNotEmpty()) {
@@ -277,10 +343,13 @@ class TgWsProxyServer(
     }
 
     private fun directWarmupRedirects(): Map<Int, String> {
-        return if (config.cfProxyEnabled && config.cfProxyFirst) emptyMap() else config.dcRedirects
+        val current = config
+        return if (!connectivity.state.value.allowsBackgroundWork ||
+            (current.cfProxyEnabled && current.cfProxyFirst)
+        ) emptyMap() else current.dcRedirects
     }
 
-    private suspend fun handleClient(clientSocket: Socket) {
+    private suspend fun handleClient(clientSocket: Socket, epoch: Long) {
         val clientAddr = clientSocket.remoteSocketAddress.toString()
         ProxyStats.connectionsTotal.incrementAndGet()
         ProxyStats.connectionsActive.incrementAndGet()
@@ -357,7 +426,7 @@ class TgWsProxyServer(
                 telegramEncryptor = relayInit.telegramEncryptor,
             )
 
-            val upstream = Bridge.connectUpstream(
+            val upstream = bridge.connectUpstream(
                 dc = absDc,
                 isMedia = isMedia,
                 config = config,
@@ -365,8 +434,14 @@ class TgWsProxyServer(
                 protoTag = handshake.protoTag,
                 relayInit = relayInit.initPacket,
                 tcpFallback = tcpFallback,
+                epoch = epoch,
             )
-            activeUpstreams.add(upstream)
+            if (!connectivity.recordIfCurrent(epoch) {
+                if (running.get() && !stopRequested.get()) activeUpstreams.add(upstream)
+            } || upstream !in activeUpstreams) {
+                upstream.abort()
+                return
+            }
             DiagnosticLogger.event(
                 "upstream_connected",
                 "dc" to absDc,
@@ -379,7 +454,7 @@ class TgWsProxyServer(
             }
 
             try {
-                Bridge.bridgeReencrypt(
+                bridge.bridgeReencrypt(
                     clientInput = input,
                     clientOutput = output,
                     upstream = upstream,
@@ -395,7 +470,7 @@ class TgWsProxyServer(
                 )
             } finally {
                 activeUpstreams.remove(upstream)
-                upstream.close()
+                upstream.abort()
             }
 
         } catch (e: CancellationException) {
@@ -409,7 +484,7 @@ class TgWsProxyServer(
             DiagnosticLogger.event("handshake_timeout")
         } catch (e: Exception) {
             if (globalVerbose) {
-                Log.w(TAG, "Client handler error ($clientAddr): ${e.message}")
+                Log.w(TAG, "Client handler error ($clientAddr): ${cfTransportErrorForLog(e)}")
             }
             DiagnosticLogger.failure("client_session_failed", e)
         } finally {

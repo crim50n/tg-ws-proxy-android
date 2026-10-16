@@ -33,12 +33,15 @@ import dev.minios.tgwsproxy.update.UpdateState
 import dev.minios.tgwsproxy.data.ConfigRepository
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import dev.minios.tgwsproxy.diagnostics.ConnectionAdvice
-import dev.minios.tgwsproxy.diagnostics.analyzeConnectionMode
+import dev.minios.tgwsproxy.diagnostics.analyzeConnectivity
 import dev.minios.tgwsproxy.diagnostics.withConnectionAdvice
 import dev.minios.tgwsproxy.diagnostics.withAutomaticRouteDefaults
 import dev.minios.tgwsproxy.diagnostics.withAutomaticPerformanceDefaults
 import dev.minios.tgwsproxy.diagnostics.withRuntimeConnectionPreferences
 import dev.minios.tgwsproxy.proxy.CfProxyDomains
+import dev.minios.tgwsproxy.proxy.ConnectivityTracker
+import dev.minios.tgwsproxy.proxy.ConnectivitySnapshot
+import dev.minios.tgwsproxy.proxy.NetworkStatus
 import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyStats
 import dev.minios.tgwsproxy.proxy.ProxyConfig
@@ -100,12 +103,18 @@ class ProxyService : Service() {
     private var routeProbeJob: Job? = null
     private var networkChangeJob: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
-    private var automaticRouteOverride: ConnectionAdvice? = null
+    private data class AutomaticAdvice(
+        val advice: ConnectionAdvice,
+        val tracker: ConnectivityTracker,
+        val decision: NetworkDecision,
+    )
+    private var automaticRouteOverride: AutomaticAdvice? = null
+    private val networkAccess = NetworkAccessState()
     private var runtimeGeneration = 0L
     @Volatile private var activeRuntimeId = 0L
-    private var networkSignature: String? = null
+    @Volatile private var runtimeConnectivity: ConnectivityTracker? = null
+    private var requestedNetworkStatus = NetworkStatus.UNKNOWN
     @Volatile private var currentNetwork: Network? = null
-    @Volatile private var hasSeenNetwork = false
     @Volatile private var notificationHost = "127.0.0.1"
     @Volatile private var notificationPort = 1443
     @Volatile private var notificationShowTraffic = false
@@ -119,6 +128,8 @@ class ProxyService : Service() {
         val startFailure: StateFlow<ProxyStartFailure?> = _startFailure.asStateFlow()
         private val _serviceState = MutableStateFlow(ProxyServiceState.STOPPED)
         val serviceState: StateFlow<ProxyServiceState> = _serviceState.asStateFlow()
+        private val _connectivityState = MutableStateFlow(ConnectivitySnapshot(stopped = true))
+        val connectivityState: StateFlow<ConnectivitySnapshot> = _connectivityState.asStateFlow()
 
         @Volatile
         var instance: ProxyService? = null
@@ -222,15 +233,33 @@ class ProxyService : Service() {
         val runtimeId = synchronized(runtimeOwnershipLock) {
             (++runtimeGeneration).also { activeRuntimeId = it }
         }
+        val connectivity = ConnectivityTracker()
+        runtimeConnectivity = connectivity
         serverJob = serviceScope?.launch {
             var ownedServer: TgWsProxyServer? = null
             try {
                 val configRepo = ConfigRepository(applicationContext)
                 val savedConfig = configRepo.getConfig()
+                val manager = getSystemService(ConnectivityManager::class.java)
+                val initialNetwork = manager.activeNetwork
+                val initialCapabilities = initialNetwork?.let(manager::getNetworkCapabilities)
+                val initialStatus = classifyNetwork(
+                    initialNetwork != null,
+                    initialCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true,
+                    initialCapabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true,
+                    false,
+                )
+                connectivity.updateNetwork(initialNetwork?.networkHandle, initialStatus)
+                val configurationEpoch = connectivity.state.value.epoch
+                val carriedAdvice = synchronized(runtimeOwnershipLock) {
+                    automaticRouteOverride?.takeIf {
+                        it.decision.canCarryTo(initialNetwork?.networkHandle, initialStatus)
+                    }.also { automaticRouteOverride = it }
+                }
                 val routedConfig = if (savedConfig.autoOptimizeConnection) {
                     val automaticDefault = savedConfig.withAutomaticRouteDefaults()
-                    automaticRouteOverride?.let {
-                        automaticDefault.withConnectionAdvice(it).withAutomaticPerformanceDefaults()
+                    carriedAdvice?.let {
+                        automaticDefault.withConnectionAdvice(it.advice).withAutomaticPerformanceDefaults()
                     } ?: automaticDefault
                 } else {
                     savedConfig
@@ -256,36 +285,11 @@ class ProxyService : Service() {
                     "redirectCount" to config.dcRedirects.size,
                     "runtimeId" to runtimeId,
                 )
-                launch {
-                    var notifiedForEpoch: String? = null
-                    DiagnosticLogger.entries.collect { entries ->
-                        val epoch = entries.lastOrNull {
-                            it.event == "runtime_starting" || it.event == "network_changed"
-                        }?.let { "${it.timestamp}:${it.event}" } ?: return@collect
-                        val advice = analyzeConnectionMode(
-                            entries,
-                            configuredCfEnabled = config.cfProxyEnabled,
-                            configuredCfFirst = config.cfProxyFirst,
-                        )
-                        if (advice == null) {
-                            if (!config.autoOptimizeConnection) notificationManager.cancel(ADVICE_NOTIFICATION_ID)
-                            return@collect
-                        }
-                        if (notifiedForEpoch == epoch) return@collect
-                        notifiedForEpoch = epoch
-                        if (config.autoOptimizeConnection) {
-                            applyAutomaticAdvice(advice)
-                        } else {
-                            showConnectionAdvice(advice)
-                        }
-                    }
-                }
-
                 // Update notification with actual config
                 updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
 
                 // Start server
-                val srv = TgWsProxyServer(config)
+                val srv = TgWsProxyServer(config, connectivity)
                 srv.onStatusChange = { running ->
                     if (running && !stopRequested && activeRuntimeId == runtimeId) {
                         _serviceState.value = ProxyServiceState.RUNNING
@@ -306,8 +310,56 @@ class ProxyService : Service() {
                     }
                     ownedServer = srv
                     server = srv
-                    registerNetworkCallback(config, runtimeId)
+                    registerNetworkCallback(runtimeId, connectivity)
                     startNotificationUpdates(config.host, config.port, config.showTrafficInNotification)
+                }
+                launch {
+                    var appliedEpoch = configurationEpoch
+                    var notifiedEpoch: Long? = null
+                    var backgroundAllowed = false
+                    connectivity.state.collect { snapshot ->
+                        if (stopRequested || activeRuntimeId != runtimeId || instance !== this@ProxyService ||
+                            snapshot.epoch != connectivity.state.value.epoch
+                        ) return@collect
+                        _connectivityState.value = snapshot
+                        if (appliedEpoch != snapshot.epoch) {
+                            stopRouteProbe()
+                            notificationManager.cancel(ADVICE_NOTIFICATION_ID)
+                            if (snapshot.allowsTraffic) {
+                                appliedEpoch = snapshot.epoch
+                                if (config.autoOptimizeConnection) {
+                                    automaticRouteOverride = null
+                                    val recovered = config.withAutomaticRouteDefaults().withRuntimeConnectionPreferences()
+                                    if (recovered.poolSize != srv.configSnapshot.poolSize) {
+                                        requestRestart(resetAutomaticRoute = true)
+                                        return@collect
+                                    }
+                                    srv.updateConfig(recovered)
+                                    _runtimeRouteMode.value = recovered.runtimeRouteMode()
+                                }
+                            }
+                        }
+                        srv.onConnectivityChanged()
+                        if (snapshot.allowsBackgroundWork && !backgroundAllowed && srv.isRunning && config.routeProbesEnabled) {
+                            startRouteProbe(srv.configSnapshot, runtimeId)
+                        }
+                        backgroundAllowed = snapshot.allowsBackgroundWork
+                        val activeConfig = srv.configSnapshot
+                        if (restartJob?.isActive == true) return@collect
+                        val advice = analyzeConnectivity(snapshot, activeConfig.cfProxyEnabled, activeConfig.cfProxyFirst)
+                        if (advice == null) {
+                            if (!activeConfig.autoOptimizeConnection) notificationManager.cancel(ADVICE_NOTIFICATION_ID)
+                            return@collect
+                        }
+                        if (notifiedEpoch == snapshot.epoch) return@collect
+                        notifiedEpoch = snapshot.epoch
+                        // An old snapshot must never change the new network's route.
+                        synchronized(runtimeOwnershipLock) {
+                            if (activeRuntimeId == runtimeId && connectivity.isCurrent(snapshot.epoch) &&
+                                connectivity.state.value.internetConfirmed && activeConfig.autoOptimizeConnection
+                            ) applyAutomaticAdvice(advice, connectivity, runtimeId, snapshot.epoch)
+                        }
+                    }
                 }
                 Log.i(TAG, "Starting proxy server on ${config.host}:${config.port}")
                 srv.start() // blocks until stopped
@@ -328,6 +380,7 @@ class ProxyService : Service() {
                 DiagnosticLogger.failure("runtime_failed", e)
                 if (!stopRequested) stopAfterRuntimeFailure()
             } finally {
+                connectivity.stop()
                 synchronized(runtimeOwnershipLock) {
                     if (activeRuntimeId == runtimeId) {
                         activeRuntimeId = 0L
@@ -339,6 +392,8 @@ class ProxyService : Service() {
                         releaseWakeLock()
                         if (server === ownedServer) server = null
                         _runtimeRouteMode.value = null
+                        runtimeConnectivity = null
+                        if (instance === this@ProxyService) _connectivityState.value = connectivity.state.value
                         if (!stopRequested && _serviceState.value == ProxyServiceState.RUNNING) {
                             _serviceState.value = ProxyServiceState.STOPPED
                         }
@@ -363,6 +418,8 @@ class ProxyService : Service() {
             val id = activeRuntimeId
             val owned = server
             if (activeRuntimeId == id) activeRuntimeId = 0L
+            runtimeConnectivity?.stop()
+            runtimeConnectivity = null
             stopUpdateChecks(clearNotification = !_serviceState.value.keepsUpdateNotification)
             id to owned
         }
@@ -408,13 +465,21 @@ class ProxyService : Service() {
         return stopped
     }
 
-    private fun requestRestart(resetAutomaticRoute: Boolean = true) {
+    private fun requestRestart(resetAutomaticRoute: Boolean = true, advice: AutomaticAdvice? = null) {
         if (stopRequested || !_serviceState.value.acceptsRestart) return
-        if (resetAutomaticRoute) automaticRouteOverride = null
         if (restartJob?.isActive == true) return
         restartJob = lifecycleScope.launch {
             runtimeMutex.withLock {
                 if (stopRequested) return@withLock
+                synchronized(runtimeOwnershipLock) {
+                    if (advice != null) {
+                        if (runtimeConnectivity !== advice.tracker ||
+                            !advice.decision.appliesTo(activeRuntimeId, advice.tracker.state.value)
+                        ) return@withLock
+                        automaticRouteOverride = advice
+                        DiagnosticLogger.event("connection_advice_applied", "advice" to advice.advice.name, "source" to "automatic")
+                    } else if (resetAutomaticRoute) automaticRouteOverride = null
+                }
                 _serviceState.value = ProxyServiceState.RESTARTING
                 Log.i(TAG, "Restarting proxy runtime...")
                 DiagnosticLogger.event("runtime_restarting")
@@ -437,17 +502,18 @@ class ProxyService : Service() {
         }
     }
 
-    private fun applyAutomaticAdvice(advice: ConnectionAdvice) {
-        if (stopRequested) return
-        automaticRouteOverride = advice
+    private fun applyAutomaticAdvice(advice: ConnectionAdvice, tracker: ConnectivityTracker, runtimeId: Long, epoch: Long) {
+        if (stopRequested || restartJob?.isActive == true) return
         notificationManager.cancel(ADVICE_NOTIFICATION_ID)
-        DiagnosticLogger.event("connection_advice_applied", "advice" to advice.name, "source" to "automatic")
-        requestRestart(resetAutomaticRoute = false)
+        requestRestart(resetAutomaticRoute = false,
+            advice = AutomaticAdvice(advice, tracker, NetworkDecision(runtimeId, epoch, tracker.state.value.networkId)))
     }
 
     private fun requestStop() {
         if (stopRequested) return
         stopRequested = true
+        runtimeConnectivity?.stop()
+        _connectivityState.value = ConnectivitySnapshot(stopped = true)
         stopUpdateChecks()
         _serviceState.value = ProxyServiceState.STOPPING
         _startFailure.value = null
@@ -470,6 +536,9 @@ class ProxyService : Service() {
     }
 
     private fun stopProxyRuntimeNow() {
+        runtimeConnectivity?.stop()
+        runtimeConnectivity = null
+        if (instance === this) _connectivityState.value = ConnectivitySnapshot(stopped = true)
         stopUpdateChecks()
         stopNotificationUpdates()
         stopRouteProbe()
@@ -529,27 +598,50 @@ class ProxyService : Service() {
         wakeLock = null
     }
 
-    private fun registerNetworkCallback(config: ProxyConfig, runtimeId: Long) {
+    private fun registerNetworkCallback(runtimeId: Long, connectivity: ConnectivityTracker) {
         if (networkCallback != null) return
         val connectivityManager = getSystemService(ConnectivityManager::class.java)
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                connectivityManager.getNetworkCapabilities(network)?.let {
-                    handleNetworkCandidate(network, it, config, runtimeId)
-                }
+                handleNetworkCandidate(network, connectivityManager.getNetworkCapabilities(network), runtimeId, connectivity)
             }
 
             override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                handleNetworkCandidate(network, capabilities, config, runtimeId)
+                handleNetworkCandidate(network, capabilities, runtimeId, connectivity)
             }
 
             override fun onLost(network: Network) {
-                if (currentNetwork == network) currentNetwork = null
+                synchronized(runtimeOwnershipLock) {
+                    if (activeRuntimeId != runtimeId || currentNetwork != network) return
+                    currentNetwork = null
+                    networkAccess.selectNetwork(null)
+                    automaticRouteOverride = null
+                    networkChangeJob?.cancel()
+                    requestedNetworkStatus = NetworkStatus.OFFLINE
+                    connectivity.updateNetwork(null, NetworkStatus.OFFLINE)
+                }
+            }
+
+            override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
+                synchronized(runtimeOwnershipLock) {
+                    if (activeRuntimeId != runtimeId || connectivityManager.activeNetwork != network) return
+                    networkAccess.selectNetwork(network.networkHandle)
+                    networkAccess.setBlocked(network.networkHandle, blocked)
+                    handleNetworkCandidate(network, connectivityManager.getNetworkCapabilities(network), runtimeId, connectivity)
+                }
             }
         }
         try {
             connectivityManager.registerDefaultNetworkCallback(callback)
             networkCallback = callback
+            val network = connectivityManager.activeNetwork
+            if (network == null) {
+                requestedNetworkStatus = NetworkStatus.OFFLINE
+                networkAccess.selectNetwork(null)
+                connectivity.updateNetwork(null, NetworkStatus.OFFLINE)
+            } else {
+                handleNetworkCandidate(network, connectivityManager.getNetworkCapabilities(network), runtimeId, connectivity, stabilize = false)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Unable to monitor network changes: ${e.message}")
         }
@@ -557,42 +649,42 @@ class ProxyService : Service() {
 
     private fun handleNetworkCandidate(
         network: Network,
-        capabilities: NetworkCapabilities,
-        config: ProxyConfig,
+        capabilities: NetworkCapabilities?,
         runtimeId: Long,
+        connectivity: ConnectivityTracker,
+        stabilize: Boolean = true,
     ) {
-        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
-            !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-        ) {
-            return
-        }
-        val transports = listOf(
-            NetworkCapabilities.TRANSPORT_WIFI to "wifi",
-            NetworkCapabilities.TRANSPORT_CELLULAR to "cellular",
-            NetworkCapabilities.TRANSPORT_VPN to "vpn",
-            NetworkCapabilities.TRANSPORT_ETHERNET to "ethernet",
-        ).filter { capabilities.hasTransport(it.first) }.joinToString("+") { it.second }
-        val signature = "${network.networkHandle}:$transports"
-        currentNetwork = network
-        val previous = networkSignature
-        networkSignature = signature
-        if (!hasSeenNetwork || previous == null) {
-            hasSeenNetwork = true
-            return
-        }
-        if (previous == signature) return
-
-        networkChangeJob?.cancel()
-        networkChangeJob = lifecycleScope.launch {
-            delay(750)
-            if (stopRequested) return@launch
-            DiagnosticLogger.event("network_changed", "transport" to transports)
-            if (config.autoOptimizeConnection) {
-                automaticRouteOverride = null
-                requestRestart(resetAutomaticRoute = true)
+        synchronized(runtimeOwnershipLock) {
+            if (stopRequested || activeRuntimeId != runtimeId || runtimeConnectivity !== connectivity) return
+            // Ignore late capabilities from a default network that has already been replaced.
+            val active = getSystemService(ConnectivityManager::class.java).activeNetwork
+            if (active != network) return
+            networkAccess.selectNetwork(network.networkHandle)
+            val status = classifyNetwork(
+                hasNetwork = true,
+                validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true,
+                captivePortal = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true,
+                blocked = networkAccess.blocked,
+            )
+            if (currentNetwork == network && requestedNetworkStatus == status) return
+            currentNetwork = network
+            requestedNetworkStatus = status
+            automaticRouteOverride = null
+            networkChangeJob?.cancel()
+            if (!stabilize || status == NetworkStatus.CAPTIVE_PORTAL || status == NetworkStatus.BLOCKED) {
+                connectivity.updateNetwork(network.networkHandle, status)
             } else {
-                server?.onNetworkChanged()
-                if (config.routeProbesEnabled) startRouteProbe(config, runtimeId)
+                connectivity.updateNetwork(network.networkHandle, NetworkStatus.CHECKING)
+                networkChangeJob = lifecycleScope.launch {
+                    delay(750)
+                    synchronized(runtimeOwnershipLock) {
+                        if (stopRequested || activeRuntimeId != runtimeId || currentNetwork != network ||
+                            requestedNetworkStatus != status || runtimeConnectivity !== connectivity
+                        ) return@synchronized
+                        connectivity.updateNetwork(network.networkHandle, status)
+                        DiagnosticLogger.event("network_changed", "state" to status.name, "epoch" to connectivity.state.value.epoch)
+                    }
+                }
             }
         }
     }
@@ -606,15 +698,21 @@ class ProxyService : Service() {
         networkChangeJob?.cancel()
         networkChangeJob = null
         currentNetwork = null
-        networkSignature = null
-        hasSeenNetwork = false
+        networkAccess.selectNetwork(null)
+        requestedNetworkStatus = NetworkStatus.UNKNOWN
     }
 
     private fun startRouteProbe(config: ProxyConfig, runtimeId: Long) {
+        val connectivity = runtimeConnectivity ?: return
+        val snapshot = connectivity.state.value
+        if (stopRequested || activeRuntimeId != runtimeId ||
+            !snapshot.allowsBackgroundWork
+        ) return
         routeProbeJob?.cancel()
         routeProbeJob = serviceScope?.launch {
             delay(1_000)
-            RouteHealthProbe.run(config, runtimeId)
+            if (activeRuntimeId != runtimeId || !connectivity.isCurrent(snapshot.epoch)) return@launch
+            RouteHealthProbe.run(config, runtimeId, connectivity, snapshot.epoch)
         }
     }
 

@@ -18,7 +18,7 @@ import dev.minios.tgwsproxy.BuildConfig
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.data.ConfigRepository
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
-import dev.minios.tgwsproxy.diagnostics.analyzeConnectionMode
+import dev.minios.tgwsproxy.diagnostics.analyzeConnectivity
 import dev.minios.tgwsproxy.diagnostics.requiresProxyRestart
 import dev.minios.tgwsproxy.proxy.*
 import dev.minios.tgwsproxy.service.ProxyService
@@ -42,6 +42,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val serviceState = ProxyService.serviceState
+    val connectivityState = ProxyService.connectivityState
     val runtimeRouteMode = ProxyService.runtimeRouteMode
     val startFailure = ProxyService.startFailure
 
@@ -52,11 +53,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val cfTestResult: StateFlow<String?> = _cfTestResult.asStateFlow()
     val diagnosticState = DiagnosticLogger.state
     val diagnosticEntries = DiagnosticLogger.entries
-    val connectionAdvice = combine(config, diagnosticEntries) { currentConfig, entries ->
+    val connectionAdvice = combine(config, connectivityState) { currentConfig, snapshot ->
         if (currentConfig.autoOptimizeConnection) {
             null
         } else {
-            analyzeConnectionMode(entries, currentConfig.cfProxyEnabled, currentConfig.cfProxyFirst)
+            analyzeConnectivity(snapshot, currentConfig.cfProxyEnabled, currentConfig.cfProxyFirst)
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     private val _updateState = MutableStateFlow(updateRepository.cachedState())

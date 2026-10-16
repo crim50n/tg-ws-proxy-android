@@ -22,6 +22,21 @@
     <string name="port_in_use_message">Local port %1$d is already in use. Stop the other app using it or select another port.</string>
     <string name="port_in_use_open_settings">Change port</string>
 
+    <!-- Short connection status, independent of the local listener. -->
+    <string name="connectivity_blocked">Android has restricted network access.</string>
+    <string name="connectivity_wait_network_state">Checking connection…</string>
+    <string name="connectivity_offline">No network. Waiting to reconnect.</string>
+    <string name="connectivity_checking">Connecting to the network…</string>
+    <string name="connectivity_captive_portal">Sign in to Wi-Fi to continue.</string>
+    <string name="connectivity_uncertain">Internet access is not confirmed yet.</string>
+    <string name="connectivity_wait_telegram">Ready. Open Telegram.</string>
+    <string name="connectivity_working">Telegram is connected.</string>
+    <string name="connectivity_wait_data">Waiting for Telegram to respond…</string>
+    <string name="connectivity_connecting">Connecting to Telegram…</string>
+    <string name="connectivity_retrying">Retrying connection…</string>
+    <string name="connectivity_unreachable">Unable to connect to Telegram.</string>
+    <string name="connectivity_degraded">Some Telegram connections are unavailable.</string>
+
     <!-- Stats -->
     <string name="stats_connections">Connections</string>
     <string name="stats_total">Total</string>

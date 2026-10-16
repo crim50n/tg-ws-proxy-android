@@ -178,7 +178,7 @@ class ConfigRepository(private val context: Context) {
                 ?: "",
             showDetailedStats = prefs[Keys.SHOW_DETAILED_STATS] ?: false,
             appTheme = prefs[Keys.APP_THEME]?.takeIf { it in setOf("system", "light", "dark") } ?: "system",
-            dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true,
+            dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: false,
         )
         })
     }

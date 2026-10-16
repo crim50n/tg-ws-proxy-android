@@ -32,7 +32,7 @@ data class ProxyConfig(
     val cfProxyUserDomain: String = "",
     val showDetailedStats: Boolean = false,
     val appTheme: String = "system",
-    val dynamicColor: Boolean = true,
+    val dynamicColor: Boolean = false,
 ) {
     /**
      * Get the secret as raw bytes (16 bytes from 32 hex chars).

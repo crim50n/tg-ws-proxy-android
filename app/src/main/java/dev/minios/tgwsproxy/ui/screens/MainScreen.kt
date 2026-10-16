@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.diagnostics.ConnectionAdvice
+import dev.minios.tgwsproxy.proxy.ConnectivitySnapshot
 import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.proxy.StatsSnapshot
@@ -30,6 +31,8 @@ import dev.minios.tgwsproxy.proxy.RuntimeRouteMode
 import dev.minios.tgwsproxy.service.ProxyStartFailure
 import dev.minios.tgwsproxy.service.ProxyServiceState
 import dev.minios.tgwsproxy.ui.theme.*
+import dev.minios.tgwsproxy.ui.ConnectionSummary
+import dev.minios.tgwsproxy.ui.presentConnectivity
 import dev.minios.tgwsproxy.update.UpdateState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -37,6 +40,7 @@ import dev.minios.tgwsproxy.update.UpdateState
 fun MainScreen(
     config: ProxyConfig,
     serviceState: ProxyServiceState,
+    connectivity: ConnectivitySnapshot,
     runtimeRouteMode: RuntimeRouteMode?,
     startFailure: ProxyStartFailure?,
     stats: StatsSnapshot,
@@ -155,6 +159,17 @@ fun MainScreen(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+
+            AnimatedVisibility(
+                visible = isActive,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                Column {
+                    ConnectivityCard(snapshot = connectivity)
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
 
             AnimatedVisibility(
                 visible = isRunning && connectionAdvice != null,
@@ -279,6 +294,56 @@ private fun PortInUseCard(port: Int, onOpenSettings: () -> Unit) {
             ) {
                 Text(stringResource(R.string.port_in_use_open_settings))
             }
+        }
+    }
+}
+
+@Composable
+private fun ConnectivityCard(snapshot: ConnectivitySnapshot) {
+    val state = presentConnectivity(snapshot)
+    val statusColor = when (state) {
+        ConnectionSummary.WORKING -> StatusGreen
+        ConnectionSummary.OFFLINE, ConnectionSummary.BLOCKED, ConnectionSummary.UNREACHABLE -> StatusRed
+        else -> StatusOrange
+    }
+    val statusIcon = when (state) {
+        ConnectionSummary.WORKING -> Icons.Default.CheckCircle
+        ConnectionSummary.OFFLINE -> Icons.Default.WifiOff
+        ConnectionSummary.BLOCKED -> Icons.Default.Block
+        ConnectionSummary.UNREACHABLE -> Icons.Default.ErrorOutline
+        ConnectionSummary.CAPTIVE_PORTAL, ConnectionSummary.DEGRADED -> Icons.Default.WarningAmber
+        else -> Icons.Default.NetworkCheck
+    }
+    val summary = when (state) {
+        ConnectionSummary.WAITING_FOR_NETWORK_STATE -> R.string.connectivity_wait_network_state
+        ConnectionSummary.OFFLINE -> R.string.connectivity_offline
+        ConnectionSummary.CHECKING -> R.string.connectivity_checking
+        ConnectionSummary.CAPTIVE_PORTAL -> R.string.connectivity_captive_portal
+        ConnectionSummary.BLOCKED -> R.string.connectivity_blocked
+        ConnectionSummary.UNCERTAIN -> R.string.connectivity_uncertain
+        ConnectionSummary.WAITING_FOR_TELEGRAM -> R.string.connectivity_wait_telegram
+        ConnectionSummary.WORKING -> R.string.connectivity_working
+        ConnectionSummary.WAITING_FOR_DATA -> R.string.connectivity_wait_data
+        ConnectionSummary.CONNECTING -> R.string.connectivity_connecting
+        ConnectionSummary.RETRYING -> R.string.connectivity_retrying
+        ConnectionSummary.UNREACHABLE -> R.string.connectivity_unreachable
+        ConnectionSummary.DEGRADED -> R.string.connectivity_degraded
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = statusColor.copy(alpha = 0.1f)),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(statusIcon, contentDescription = null, tint = statusColor)
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = stringResource(summary),
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
     }
 }
@@ -425,7 +490,7 @@ private fun StatusCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontFamily = FontFamily.Monospace,
                 )
-                if (isRunning && runtimeRouteMode != null) {
+                if (isRunning && config.showDetailedStats && runtimeRouteMode != null) {
                     Text(
                         text = stringResource(
                             R.string.runtime_route,
