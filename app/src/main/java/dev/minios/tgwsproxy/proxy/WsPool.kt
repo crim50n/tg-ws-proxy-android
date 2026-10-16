@@ -158,7 +158,8 @@ class WsPool internal constructor(
                     val retry = if (bucket.idle.size < poolSize) bucket.retryAfter else Long.MAX_VALUE
                     (minOf(expiry, retry) - now).coerceAtLeast(1L)
                 }
-                withTimeoutOrNull(waitMs) { bucket.wake.receive() }
+                val wake = withTimeoutOrNull(waitMs) { bucket.wake.receiveCatching() }
+                if (wake?.isClosed == true) return
             }
         } finally {
             synchronized(lock) {

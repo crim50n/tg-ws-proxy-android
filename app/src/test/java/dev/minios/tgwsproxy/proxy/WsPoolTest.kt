@@ -113,6 +113,24 @@ class WsPoolTest {
     }
 
     @Test
+    fun wakeChannelClosureDuringCleanupDoesNotFailWorker() = runTest {
+        val h = Harness(this)
+        h.pool.warmUp(redirects)
+        runCurrent()
+        val old = h.attempts.toList()
+        val field = WsPool::class.java.getDeclaredField("buckets").also { it.isAccessible = true }
+        val buckets = (field.get(h.pool) as Map<*, *>).values.toList()
+        // Cleanup may close the wake channel before the worker observes cancellation.
+        for (bucket in buckets) {
+            val wake = bucket!!::class.java.getDeclaredField("wake").also { it.isAccessible = true }
+                .get(bucket) as kotlinx.coroutines.channels.Channel<*>
+            wake.close()
+        }
+        runCurrent()
+        assertTrue(old.all { it.socket.isClosed })
+    }
+
+    @Test
     fun idleConnectionsRotateAndRefillAutomaticallyAtExactExpiry() = runTest {
         val h = Harness(this, size = 2, age = 100)
         h.pool.warmUp(redirects)

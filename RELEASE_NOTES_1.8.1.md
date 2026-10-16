@@ -1,4 +1,4 @@
-# TG WS Proxy 1.8.0
+# TG WS Proxy 1.8.1
 
 ## Connection awareness
 
@@ -20,6 +20,11 @@
 - Existing efficient power defaults and media-stall thresholds are unchanged.
 - Connection awareness uses Android callbacks and existing traffic, without adding periodic internet tests or network-outage notifications.
 - Optional route probes remain controlled by the existing setting.
+
+## Reliability
+
+- Fixed a WebSocket pool cleanup race where a worker could report a closed-channel error during cancellation.
+- Includes all changes prepared for 1.8.0. That version was stopped by CI before APK publication.
 
 ## Verification
 
