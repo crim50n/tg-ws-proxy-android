@@ -6,14 +6,20 @@
     <string name="proxy_stopped">Proxy stopped</string>
     <string name="proxy_starting">Proxy starting…</string>
     <string name="proxy_running">Proxy running</string>
+    <string name="proxy_uptime">Uptime: %1$s</string>
     <string name="proxy_restarting">Proxy restarting…</string>
     <string name="proxy_stopping">Proxy stopping…</string>
     <string name="btn_start">Connect</string>
+    <string name="btn_retry">Retry start</string>
+    <string name="proxy_resume_pending">The proxy is not running, but will be resumed at device startup. Retry now or tap Stop to cancel automatic restoration.</string>
+    <string name="proxy_command_failed">Unable to complete the proxy action. Try again; details are available in the diagnostic log.</string>
     <string name="btn_stop">Stop</string>
     <string name="btn_stopping">Stopping…</string>
     <string name="open_in_telegram">Open in Telegram</string>
     <string name="copy_link">Copy link</string>
     <string name="proxy_link">Proxy link</string>
+    <string name="view_proxy_link">View full proxy link</string>
+    <string name="close">Close</string>
     <string name="link_copied">Link copied</string>
     <string name="secret_copied">Secret copied</string>
     <string name="settings">Settings</string>
@@ -39,18 +45,21 @@
 
     <!-- Stats -->
     <string name="stats_connections">Connections</string>
+    <string name="stats_transport">Transport</string>
+    <string name="stats_traffic">Traffic</string>
     <string name="stats_total">Total</string>
     <string name="stats_active">Active</string>
     <string name="stats_ws">WS</string>
     <string name="stats_tcp_fallback">TCP</string>
     <string name="stats_cf_proxy">CF</string>
     <string name="stats_bad">Rejected</string>
-    <string name="stats_ws_errors">WS err</string>
+    <string name="stats_ws_errors">WebSocket errors</string>
     <string name="rejected_warning_title">Old proxy entries in Telegram</string>
     <string name="rejected_warning_message">Many connections are arriving with incorrect proxy settings. This usually means Telegram still has old entries for this local proxy. Delete them, then add the current link again. This stops unnecessary reconnects, reduces battery use, and helps Telegram connect without delays.</string>
     <string name="stats_upload">Sent</string>
-    <string name="stats_download">Recv</string>
-    <string name="stats_pool">Pool</string>
+    <string name="stats_download">Received</string>
+    <string name="stats_pool">Pool hits</string>
+    <string name="stats_pool_ratio">%1$d of %2$d</string>
 
     <!-- Settings screen -->
     <string name="settings_title">Settings</string>
@@ -94,8 +103,7 @@
     <string name="settings_pool_size">Prepared WebSocket connections</string>
     <string name="settings_background">Power usage</string>
     <string name="settings_background_desc">Choose the balance between lower battery use and reliable background connections.</string>
-    <string name="settings_start_on_boot">Start proxy when the device turns on</string>
-    <string name="settings_start_on_boot_desc">Starts the proxy automatically after Android finishes booting. Disabled by default.</string>
+    <string name="settings_restore_proxy_desc">The proxy remembers your last Start or Stop action. If you leave it enabled, it resumes after device startup. Tap Stop in the app, notification, or Quick Settings tile to keep it off.</string>
     <string name="settings_keep_cpu_awake">Keep device awake</string>
     <string name="settings_keep_cpu_awake_desc">Prevents deep sleep for the most reliable screen-off operation. Turning it off reduces idle power use.</string>
     <string name="settings_preconnect_ws">Prepare WebSocket connections</string>
@@ -197,42 +205,54 @@
 
     <!-- Help -->
     <string name="help_title">Help</string>
-    <string name="help_intro">This guide describes how the proxy works, what each setting changes, and how to diagnose connection problems.</string>
+    <string name="help_intro">Tap a section to expand or collapse it. Quick start is open by default.</string>
+    <string name="help_expand">Expand section</string>
+    <string name="help_collapse">Collapse section</string>
     <string name="help_overview_title">How the app works</string>
-    <string name="help_overview_text">Telegram connects to a local MTProto proxy on this device. The app reads the requested Telegram datacenter and forwards the encrypted connection through direct WebSocket, Cloudflare, or direct TCP. It performs lightweight route checks after startup and network changes. The active route order is shown on the main screen. Traffic contents are not decrypted by the interface or written to the connection log.</string>
-    <string name="help_quick_start_title">Initial setup</string>
-    <string name="help_quick_start_text">1. Start the proxy on the main screen.\n2. Tap “Open in Telegram.”\n3. Confirm the proxy in Telegram.\n4. Keep the service notification enabled.\n\nSettings are saved automatically. A running proxy restarts after leaving settings only when connection settings actually changed.</string>
+    <string name="help_overview_text">This app is a local MTProto bridge: Telegram connects to it on this device, and it forwards connections through direct WebSocket (WS), Cloudflare (CF), or direct TCP. It is not a VPN and affects only Telegram configured to use this proxy.\n\nThe app processes transport framing to route traffic. It does not decrypt message or media contents; remote transport services still carry the connection.</string>
+    <string name="help_quick_start_title">Quick start</string>
+    <string name="help_quick_start_text">1. Tap Connect on the main screen.\n2. Tap Open in Telegram.\n3. Confirm and select this proxy in Telegram.\n4. Open a chat to check the connection.\n\nValid settings are saved automatically. Only when you exit Settings does a running proxy restart, and only if the effective runtime settings changed. Appearance and statistics visibility apply immediately. After changing the port or secret, add the current proxy link in Telegram again.</string>
     <string name="help_mode_title">Connection modes</string>
-    <string name="help_mode_text">“Configure connection automatically” starts each proxy run and each new network with WebSocket → Cloudflare → TCP and safe connection defaults. If it temporarily selects Cloudflare → WebSocket → TCP, prepared direct WebSocket connections are disabled. If only one datacenter’s media route stops returning data, the app temporarily sends only that media route through Cloudflare. The active route order is shown on the main screen.\n\nTurn automatic configuration off to reveal manual routing options, Direct WebSocket targets, and Connection tuning directly below the switch. Manual values remain saved while automatic configuration is enabled. Settings are saved automatically; connection changes apply when you leave Settings and the running proxy restarts.</string>
+    <string name="help_mode_text">Automatic mode normally uses WS → CF → TCP and default connection parameters, then adapts to observed Telegram traffic. Optional route probes are off by default. A network change resets route selection; internal restarts may retain the learned order.\n\nIf a direct WS media session stalls, the app closes that session and temporarily prefers CF for subsequent media connections to that datacenter. Telegram may recover by reconnecting, but recovery is not guaranteed.\n\nTurn automatic mode off to configure routes, direct WS targets, and connection tuning manually. Manual values remain saved while automatic mode is enabled.</string>
     <string name="help_cf_title">Cloudflare settings</string>
-    <string name="help_cf_text">These controls are available when automatic connection mode is off. “Use Cloudflare fallback” adds the alternate route. Route order selects WebSocket or Cloudflare first; the additional switch controls whether Cloudflare or TCP follows a failed WebSocket attempt.\n\n“Use only a custom Cloudflare domain” replaces the entire shared list. Use it only when shared domains are consistently unavailable. “Test and select a domain” checks available domains against Telegram datacenters. HTTP 429 means a shared domain reached its connection limit; the app temporarily skips it.</string>
+    <string name="help_cf_text">In manual mode, enable Cloudflare as an alternate route and choose whether to try it before WS or after WS fails. The fallback switch sets whether CF or TCP follows a failed WS attempt.\n\nA custom Cloudflare domain replaces the shared list, rather than adding to it. HTTP 429 indicates rate limiting; the app puts that domain on a temporary cooldown.\n\nTest and select a domain checks connection establishment to Telegram datacenters. A successful test does not prove that sustained media transfers will work.</string>
     <string name="help_dc_title">Direct WebSocket targets</string>
-    <string name="help_dc_text">These controls are available when “Automatic connection mode” is off. A DC:IP line enables direct WebSocket for one Telegram datacenter. Telegram selects the datacenter automatically; the app only selects its route. Removing a line makes that datacenter use Cloudflare or TCP instead. Leave the default list unchanged unless you are isolating a routing problem or following a support instruction.</string>
+    <string name="help_dc_text">In manual mode, each DC:IP line assigns a direct WebSocket target to a Telegram datacenter. Telegram chooses the datacenter; this app chooses how to reach it.\n\nRemoving a line leaves that datacenter to the enabled fallback routes. Keep the default targets unless troubleshooting a specific routing problem.</string>
     <string name="help_advanced_title">Performance settings</string>
-    <string name="help_advanced_text">These controls are available when “Automatic connection mode” is off. The pool keeps direct WebSocket connections ready to reduce startup delay. The buffer controls socket memory used during transfers. The default pool size and 256 KB buffer are suitable for most devices. Lower the pool only to reduce memory and connection usage. Do not increase these values without a measured reason.</string>
+    <string name="help_advanced_text">Manual connection tuning controls the transfer buffer and prepared WS pool size. The pool is used only when Prepare WebSocket connections is enabled; otherwise no prepared sockets are kept, and the manual pool size stays saved.\n\nThe default buffer is 256 KB. Larger buffers or pools consume more resources and do not necessarily improve speed. Change one value at a time to investigate a specific problem.</string>
     <string name="help_battery_title">Power usage</string>
-    <string name="help_battery_text">The default power profile allows device sleep, does not keep prepared WebSocket connections, uses a 180-second keepalive, and disables route checks and shared Cloudflare-domain updates. Testing showed that this combination substantially reduces idle CPU and radio wakeups while remaining suitable for most networks. Existing installations are migrated only when all five effective power settings match the previous defaults. If at least one differs, the entire profile is preserved.\n\n“Keep device awake” gives the most reliable screen-off operation but prevents deep sleep. Enable it if connections stop with the screen off, and allow unrestricted background operation in Android settings. Prepared WebSocket connections reduce connection delay but retain idle sockets. A 30-second keepalive prioritizes reliability; 90 or 180 seconds wakes the cellular radio less often, but some networks may close idle connections. Automatic routing can still react to failures from real Telegram sessions when periodic route checks are disabled.</string>
+    <string name="help_battery_text">By default, Keep device awake, prepared WS connections, route probes, and shared-domain refresh are off. The WS keepalive interval is 180 seconds. Automatic routing still reacts to actual traffic when probes are off.\n\nKeeping the device awake may help with screen-off interruptions, but uses power and cannot guarantee network access. Prepared connections retain idle sockets; shorter keepalives send more frequent traffic. Adjust these only as needed: results depend on Android and the network.</string>
     <string name="help_theme_title">Theme and appearance</string>
-    <string name="help_theme_text">Choose System, Light, or Dark appearance. On Android 12 and newer, adaptive colors use the Material You palette generated from the device wallpaper. Appearance changes are applied and saved automatically.</string>
+    <string name="help_theme_text">Select System, Light, or Dark in the theme options. The app uses a Telegram-style palette unless Adaptive colors is enabled on Android 12 or newer, where it uses the device Material You palette.\n\nAppearance changes are saved and applied immediately without restarting the proxy.</string>
     <string name="help_log_title">Diagnostic log</string>
-    <string name="help_log_text">The diagnostic log runs continuously and keeps approximately 4 MB of the latest technical events, discarding the oldest first. After a connection problem, open the log and share the report immediately; you do not need to reproduce the problem under recording.\n\nEvents are queued and written in batches away from proxy threads. Message and media contents and the proxy secret are not recorded. Sensitive proxy links, secrets, and IP addresses are redacted before persistence and again during export. Saved files expire after 7 days. Clearing the log deletes the accumulated history, and collection then continues automatically.</string>
+    <string name="help_log_text">Open Settings → Support and diagnostics → Diagnostic log. Logging runs while the app process is alive and keeps up to approximately 4 MB of recent technical events. Cleanup removes events older than 7 days. The bounded queue can drop events under load; share a report soon after a problem.\n\nMessage and media contents are not logged. Recognized proxy links, secrets, IP addresses, and sensitive fields are redacted, including during export, but review reports before sharing. Reports include app and OS details and the device model.\n\nClearing the log removes stored history, not previously exported or shared copies. Logging continues while the process is running.</string>
     <string name="help_troubleshooting_title">Troubleshooting</string>
-    <string name="help_troubleshooting_text">Media does not load in automatic mode: keep the download open while the app detects the stalled media connection and retries that datacenter through Cloudflare.\n\nMedia does not load in manual mode: select “Try Cloudflare first” and leave Settings to apply the change.\n\nCloudflare fails: turn automatic mode off, test the domains, and look for HTTP 429 in the diagnostic log.\n\nConnections stop with the screen off: allow background operation and disable battery optimization for the app.\n\nProblem persists: open the diagnostic log immediately after the failure and share the already collected report.</string>
+    <string name="help_troubleshooting_text">First check that Telegram has the current proxy selected; remove old entries and add the current link again. Confirm internet access and complete any Wi-Fi sign-in. If the local port is occupied, stop the app using it or choose another port.\n\nFor stalled media, let Telegram reconnect or retry the download. In manual mode, try Cloudflare first and exit Settings to apply it. Test CF domains if needed, but a successful test does not guarantee media playback.\n\nFor screen-off failures, check Android background and battery restrictions; keeping the device awake may help. If the problem persists, review and share a diagnostic report soon after the failure, with a description of what stopped working.</string>
     <string name="help_background_title">Background operation</string>
-    <string name="help_background_text">“Start proxy when the device turns on” can launch the foreground service automatically after Android finishes booting. It is disabled by default and only works after the app has been opened at least once. After force-stopping the app in Android settings, open it again to restore boot startup.\n\nKeep the foreground-service notification enabled. Some Android vendors may still restrict background networking; exclude the app from battery optimization if connections stop when the screen is off. If “Keep device awake” is off, enable it again before investigating other screen-off failures.</string>
+    <string name="help_background_text">There is no separate startup switch. Starting the proxy saves your intention to keep it enabled; after device startup the app attempts to restore it. Stop in the app or notification, or switching off the Quick Settings tile, cancels restoration. A process crash, system shutdown, or internal restart does not count as Stop.\n\nIf startup fails, the main screen offers Retry start and Stop so you can cancel restoration even while the proxy is not running. When upgrading from a version with the startup switch, its saved value is used initially; subsequent Start and Stop actions determine the behavior.\n\nAndroid force-stop and background restrictions can prevent restoration. Reopen the app after force-stop and retry starting if needed. The service notification provides Restart and Stop controls; traffic display is optional.</string>
+    <string name="help_status_title">Status and statistics</string>
+    <string name="help_status_text">Proxy running means the local service is active, not that Telegram can reach its servers. Check the separate connection status and try sending or loading something in Telegram.\n\nDetailed route and statistics displays are optional. Connection counters count connections, not people or messages. Pool hits show successful uses out of attempts, not the number of ready sockets. Zero hits are normal when prepared connections are disabled. Error counters include past failures and do not alone indicate a current outage.</string>
+    <string name="help_security_title">Security and access</string>
+    <string name="help_security_text">Keep the listen address at 127.0.0.1 for access only from this device. 0.0.0.0 listens on all IPv4 interfaces and may expose the proxy to reachable networks. Do not share the proxy secret or link.\n\nThe TLS WebSocket client does not verify server certificates. Direct TCP adds no TLS layer. Telegram message encryption is separate from these transports; this app is not a VPN and does not promise anonymity.</string>
+    <string name="help_updates_title">App updates</string>
+    <string name="help_updates_text">Check for GitHub releases in About. For in-app downloads, the app verifies SHA-256, package identity, version, and signing certificate before handing the APK to the Android installer. These checks are not malware scanning.\n\nAndroid requires permission to install unknown apps and your confirmation to install. If no suitable download assets are available, the app opens the release page instead.</string>
 
     <!-- About screen -->
     <string name="about_title">About</string>
     <string name="about_version">Version %1$s</string>
-    <string name="about_description">An on-device MTProto proxy for Telegram with WebSocket transport and automatic Cloudflare/TCP fallback.</string>
-    <string name="about_local_title">Local and private</string>
-    <string name="about_local_text">Runs entirely on your device without root, an account, ads, or analytics.</string>
-    <string name="about_transport_title">Resilient transport</string>
-    <string name="about_transport_text">Uses pooled TLS WebSocket connections with Cloudflare and direct TCP fallback.</string>
+    <string name="about_description">A local MTProto bridge for Telegram with WebSocket, Cloudflare, and direct TCP routes.</string>
+    <string name="about_local_title">Local proxy</string>
+    <string name="about_local_text">No root or separate app account required. No ads or analytics. The proxy runs on this device and connects through remote transport services.</string>
+    <string name="about_transport_title">Connection routes</string>
+    <string name="about_transport_text">Automatic or manual routing through WS, CF, and TCP. Prepared WebSocket connections are optional and off by default.</string>
     <string name="about_background_title">Built for background use</string>
     <string name="about_background_text">Includes a foreground service, notification controls, Quick Settings tile, and live statistics.</string>
     <string name="about_source_code">Source code</string>
     <string name="about_license">MIT License</string>
-    <string name="about_based_on">Inspired by tg-ws-proxy by Flowseal. This Android implementation is developed independently.</string>
+    <string name="about_based_on">Inspired by tg-ws-proxy by Flowseal. Developed independently of Flowseal; not an official Telegram product.</string>
     <string name="about_flowseal_project">Original Flowseal project</string>
+    <string name="about_limits_title">Important limits</string>
+    <string name="about_limits_text">Not a VPN or an anonymity guarantee. The WS client does not verify server certificates; direct TCP adds no TLS. Telegram message encryption is separate.</string>
+    <string name="about_updates_note">Updates come from GitHub. In-app downloads are checked for SHA-256, package, version, and signing certificate; installation requires Android permission and your confirmation.</string>
+    <string name="about_tabler_icons">Tabler Icons · MIT</string>
 </resources>

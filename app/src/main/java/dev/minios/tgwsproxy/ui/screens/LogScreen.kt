@@ -7,10 +7,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -24,8 +20,8 @@ import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.diagnostics.DiagnosticEntry
 import dev.minios.tgwsproxy.diagnostics.DiagnosticState
+import dev.minios.tgwsproxy.ui.icons.TablerIcons
 import dev.minios.tgwsproxy.ui.theme.StatusGreen
-import dev.minios.tgwsproxy.ui.theme.StatusRed
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,11 +43,12 @@ fun LogScreen(
         initialScrollCompleted = true
     }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress }.collect { isScrolling ->
-            if (!isScrolling && initialScrollCompleted) {
-                followTail = !listState.canScrollForward
+        snapshotFlow { listState.isScrollInProgress }
+            .collect { isScrolling ->
+                if (!isScrolling && initialScrollCompleted) {
+                    followTail = !listState.canScrollForward
+                }
             }
-        }
     }
 
     Scaffold(
@@ -62,70 +59,73 @@ fun LogScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
+                            TablerIcons.ArrowLeft,
                             contentDescription = stringResource(R.string.navigate_back),
                         )
                     }
                 },
                 actions = {
                     IconButton(onClick = onExportDiagnostics, enabled = diagnosticState.hasLog) {
-                        Icon(Icons.Default.FileUpload, contentDescription = stringResource(R.string.diagnostics_export))
+                        Icon(
+                            TablerIcons.FileUpload,
+                            contentDescription = stringResource(R.string.diagnostics_export),
+                        )
                     }
                     IconButton(onClick = onClearDiagnostics, enabled = diagnosticState.hasLog) {
-                        Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.diagnostics_clear))
+                        Icon(
+                            TablerIcons.Trash,
+                            contentDescription = stringResource(R.string.diagnostics_clear),
+                        )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
-                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
             )
         },
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .padding(16.dp),
+        Box(
+            modifier = Modifier.fillMaxSize().padding(paddingValues),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            Text(
-                text = stringResource(R.string.diagnostics_always_on_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            if (entries.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = stringResource(R.string.log_empty),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(end = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(bottom = 12.dp),
-                    ) {
-                        itemsIndexed(
-                            items = entries,
-                            key = { index, entry -> "$index:${entry.timestamp}:${entry.event}" },
-                        ) { _, entry ->
-                            LogEntryRow(entry)
-                        }
+            Column(modifier = Modifier.widthIn(max = 640.dp).fillMaxSize().padding(16.dp)) {
+                Text(
+                    text = stringResource(R.string.diagnostics_always_on_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                if (entries.isEmpty()) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = stringResource(R.string.log_empty),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    LazyListScrollbar(
-                        state = listState,
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .fillMaxHeight(),
-                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(end = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            contentPadding = PaddingValues(bottom = 12.dp),
+                        ) {
+                            itemsIndexed(
+                                items = entries,
+                                key = { index, entry -> "$index:${entry.timestamp}:${entry.event}" },
+                            ) { _, entry ->
+                                LogEntryRow(entry)
+                            }
+                        }
+                        LazyListScrollbar(
+                            state = listState,
+                            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                        )
+                    }
                 }
             }
         }
@@ -133,64 +133,59 @@ fun LogScreen(
 }
 
 @Composable
-private fun LazyListScrollbar(
-    state: LazyListState,
-    modifier: Modifier = Modifier,
-) {
-    val metrics by remember(state) {
-        derivedStateOf {
-            val layoutInfo = state.layoutInfo
-            Triple(
-                layoutInfo.visibleItemsInfo.size,
-                layoutInfo.totalItemsCount,
-                state.firstVisibleItemIndex,
-            )
+private fun LazyListScrollbar(state: LazyListState, modifier: Modifier = Modifier) {
+    val metrics by
+        remember(state) {
+            derivedStateOf {
+                val layoutInfo = state.layoutInfo
+                Triple(
+                    layoutInfo.visibleItemsInfo.size,
+                    layoutInfo.totalItemsCount,
+                    state.firstVisibleItemIndex,
+                )
+            }
         }
-    }
     val (visibleItems, totalItems, firstVisibleItemIndex) = metrics
     if (visibleItems == 0 || visibleItems >= totalItems) return
 
     BoxWithConstraints(modifier = modifier.width(5.dp)) {
         val visibleFraction = (visibleItems.toFloat() / totalItems).coerceIn(0f, 1f)
-        val thumbHeight = (maxHeight * visibleFraction)
-            .coerceAtLeast(32.dp)
-            .coerceAtMost(maxHeight)
+        val thumbHeight = (maxHeight * visibleFraction).coerceAtLeast(32.dp).coerceAtMost(maxHeight)
         val maxFirstIndex = (totalItems - visibleItems).coerceAtLeast(1)
         val scrollFraction = (firstVisibleItemIndex.toFloat() / maxFirstIndex).coerceIn(0f, 1f)
         val thumbOffset = (maxHeight - thumbHeight) * scrollFraction
 
         Box(
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .offset(y = thumbOffset)
-                .width(4.dp)
-                .height(thumbHeight)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.55f)),
+            modifier =
+                Modifier.align(Alignment.TopCenter)
+                    .offset(y = thumbOffset)
+                    .width(4.dp)
+                    .height(thumbHeight)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
         )
     }
 }
 
 @Composable
 private fun LogEntryRow(entry: DiagnosticEntry) {
-    val eventColor = when {
-        entry.level >= dev.minios.tgwsproxy.diagnostics.DiagnosticLevel.ERROR -> MaterialTheme.colorScheme.error
-        entry.event.contains("failed", ignoreCase = true) ||
-                entry.event.contains("rejected", ignoreCase = true) -> MaterialTheme.colorScheme.error
-        entry.event.contains("ready", ignoreCase = true) ||
+    val eventColor =
+        when {
+            entry.level >= dev.minios.tgwsproxy.diagnostics.DiagnosticLevel.ERROR ->
+                MaterialTheme.colorScheme.error
+            entry.event.contains("failed", ignoreCase = true) ||
+                entry.event.contains("rejected", ignoreCase = true) ->
+                MaterialTheme.colorScheme.error
+            entry.event.contains("ready", ignoreCase = true) ||
                 entry.event.contains("connected", ignoreCase = true) -> StatusGreen
-        else -> MaterialTheme.colorScheme.primary
-    }
+            else -> MaterialTheme.colorScheme.primary
+        }
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            MaterialTheme.colorScheme.outline.copy(alpha = 0.55f),
-        ),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = entry.timestamp.substringAfter('T').take(12),
@@ -215,7 +210,7 @@ private fun LogEntryRow(entry: DiagnosticEntry) {
                 )
             }
             if (entry.details.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(8.dp))
                 Text(
                     text = entry.details,
                     style = MaterialTheme.typography.bodySmall,

@@ -2,37 +2,35 @@ package dev.minios.tgwsproxy.ui.screens
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.HelpOutline
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.diagnostics.ConnectionAdvice
 import dev.minios.tgwsproxy.proxy.ConnectivitySnapshot
 import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyConfig
-import dev.minios.tgwsproxy.proxy.StatsSnapshot
 import dev.minios.tgwsproxy.proxy.RuntimeRouteMode
-import dev.minios.tgwsproxy.service.ProxyStartFailure
+import dev.minios.tgwsproxy.proxy.StatsSnapshot
 import dev.minios.tgwsproxy.service.ProxyServiceState
-import dev.minios.tgwsproxy.ui.theme.*
+import dev.minios.tgwsproxy.service.ProxyStartFailure
 import dev.minios.tgwsproxy.ui.ConnectionSummary
+import dev.minios.tgwsproxy.ui.icons.TablerIcons
 import dev.minios.tgwsproxy.ui.presentConnectivity
+import dev.minios.tgwsproxy.ui.theme.*
 import dev.minios.tgwsproxy.update.UpdateState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -40,6 +38,8 @@ import dev.minios.tgwsproxy.update.UpdateState
 fun MainScreen(
     config: ProxyConfig,
     serviceState: ProxyServiceState,
+    proxyEnabled: Boolean,
+    commandFailed: Boolean,
     connectivity: ConnectivitySnapshot,
     runtimeRouteMode: RuntimeRouteMode?,
     startFailure: ProxyStartFailure?,
@@ -64,18 +64,25 @@ fun MainScreen(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.app_name)) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                    actionIconContentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
+                colors =
+                    TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
+                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
                 actions = {
                     IconButton(onClick = onOpenSettings) {
-                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings))
+                        Icon(
+                            TablerIcons.Settings,
+                            contentDescription = stringResource(R.string.settings),
+                        )
                     }
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.more_options))
+                            Icon(
+                                TablerIcons.DotsVertical,
+                                contentDescription = stringResource(R.string.more_options),
+                            )
                         }
                         DropdownMenu(
                             expanded = menuExpanded,
@@ -83,7 +90,7 @@ fun MainScreen(
                         ) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.help_title)) },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.HelpOutline, contentDescription = null) },
+                                leadingIcon = { Icon(TablerIcons.Help, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
                                     onOpenHelp()
@@ -91,7 +98,9 @@ fun MainScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.about_title)) },
-                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
+                                leadingIcon = {
+                                    Icon(TablerIcons.InfoCircle, contentDescription = null)
+                                },
                                 onClick = {
                                     menuExpanded = false
                                     onOpenAbout()
@@ -103,118 +112,126 @@ fun MainScreen(
             )
         },
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(paddingValues)
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+        Box(
+            modifier = Modifier.fillMaxSize().padding(paddingValues),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            val availableUpdate = when (updateState) {
-                is UpdateState.Available -> updateState.release
-                is UpdateState.Downloading -> updateState.release
-                else -> null
-            }
-            AnimatedVisibility(
-                visible = availableUpdate != null,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
+            Column(
+                modifier =
+                    Modifier.widthIn(max = 640.dp)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                if (availableUpdate != null) {
-                    Column {
-                        UpdateCard(
-                            versionName = availableUpdate.versionName,
-                            downloading = updateState is UpdateState.Downloading,
-                            installable = availableUpdate.apkUrl != null && availableUpdate.checksumUrl != null,
-                            onOpenUpdate = onOpenUpdate,
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
+                val availableUpdate =
+                    when (updateState) {
+                        is UpdateState.Available -> updateState.release
+                        is UpdateState.Downloading -> updateState.release
+                        else -> null
+                    }
+                StatusCard(
+                    serviceState = serviceState,
+                    config = config,
+                    uptimeSeconds = stats.uptimeSeconds,
+                    runtimeRouteMode = runtimeRouteMode,
+                ) {
+                    ProxyControls(
+                        serviceState = serviceState,
+                        proxyEnabled = proxyEnabled,
+                        commandFailed = commandFailed,
+                        onStart = onStart,
+                        onStop = onStop,
+                        onOpenInTelegram = onOpenInTelegram,
+                        onCopyLink = onCopyLink,
+                        proxyLink = proxyLink,
+                    )
+                }
+
+                AnimatedVisibility(
+                    visible =
+                        startFailure is ProxyStartFailure.PortInUse &&
+                            startFailure.port == config.port,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    val failure = startFailure as? ProxyStartFailure.PortInUse
+                    if (failure != null) {
+                        Column {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            PortInUseCard(port = failure.port, onOpenSettings = onOpenSettings)
+                        }
                     }
                 }
-            }
 
-            StatusCard(
-                serviceState = serviceState,
-                config = config,
-                uptimeSeconds = stats.uptimeSeconds,
-                runtimeRouteMode = runtimeRouteMode,
-            )
-
-            AnimatedVisibility(
-                visible = startFailure is ProxyStartFailure.PortInUse && startFailure.port == config.port,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                val failure = startFailure as? ProxyStartFailure.PortInUse
-                if (failure != null) {
+                AnimatedVisibility(
+                    visible = isActive,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
                     Column {
                         Spacer(modifier = Modifier.height(16.dp))
-                        PortInUseCard(
-                            port = failure.port,
-                            onOpenSettings = onOpenSettings,
-                        )
+                        ConnectivityCard(snapshot = connectivity)
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            AnimatedVisibility(
-                visible = isActive,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                Column {
-                    ConnectivityCard(snapshot = connectivity)
-                    Spacer(modifier = Modifier.height(16.dp))
+                AnimatedVisibility(
+                    visible = isRunning && connectionAdvice != null,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    if (connectionAdvice != null) {
+                        Column {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            ConnectionAdviceCard(connectionAdvice)
+                        }
+                    }
                 }
-            }
 
-            AnimatedVisibility(
-                visible = isRunning && connectionAdvice != null,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                if (connectionAdvice != null) {
+                AnimatedVisibility(
+                    visible = availableUpdate != null,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    if (availableUpdate != null) {
+                        Column {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            UpdateCard(
+                                versionName = availableUpdate.versionName,
+                                downloading = updateState is UpdateState.Downloading,
+                                installable =
+                                    availableUpdate.apkUrl != null &&
+                                        availableUpdate.checksumUrl != null,
+                                onOpenUpdate = onOpenUpdate,
+                            )
+                        }
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible =
+                        shouldWarnRejectedConnections(
+                            total = stats.connectionsTotal,
+                            rejected = stats.connectionsBad,
+                        ),
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
                     Column {
-                        ConnectionAdviceCard(connectionAdvice)
                         Spacer(modifier = Modifier.height(16.dp))
+                        RejectedConnectionsWarning()
                     }
                 }
-            }
 
-            ControlsCard(
-                serviceState = serviceState,
-                onStart = onStart,
-                onStop = onStop,
-                onOpenInTelegram = onOpenInTelegram,
-                onCopyLink = onCopyLink,
-                proxyLink = proxyLink,
-            )
-
-            AnimatedVisibility(
-                visible = shouldWarnRejectedConnections(
-                    total = stats.connectionsTotal,
-                    rejected = stats.connectionsBad,
-                ),
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                Column {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    RejectedConnectionsWarning()
-                }
-            }
-
-            AnimatedVisibility(
-                visible = isActive && config.showDetailedStats,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                Column {
-                    Spacer(modifier = Modifier.height(16.dp))
-                    StatsCard(stats = stats)
+                AnimatedVisibility(
+                    visible = isActive && config.showDetailedStats,
+                    enter = fadeIn() + expandVertically(),
+                    exit = fadeOut() + shrinkVertically(),
+                ) {
+                    Column {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        StatsCard(stats = stats)
+                    }
                 }
             }
         }
@@ -235,7 +252,7 @@ private fun RejectedConnectionsWarning() {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Default.WarningAmber,
+                    TablerIcons.AlertTriangle,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onErrorContainer,
                 )
@@ -267,7 +284,7 @@ private fun PortInUseCard(port: Int, onOpenSettings: () -> Unit) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Default.ErrorOutline,
+                    TablerIcons.AlertCircle,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onErrorContainer,
                 )
@@ -288,9 +305,10 @@ private fun PortInUseCard(port: Int, onOpenSettings: () -> Unit) {
             TextButton(
                 onClick = onOpenSettings,
                 modifier = Modifier.align(Alignment.End),
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
+                colors =
+                    ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    ),
             ) {
                 Text(stringResource(R.string.port_in_use_open_settings))
             }
@@ -301,69 +319,71 @@ private fun PortInUseCard(port: Int, onOpenSettings: () -> Unit) {
 @Composable
 private fun ConnectivityCard(snapshot: ConnectivitySnapshot) {
     val state = presentConnectivity(snapshot)
-    val statusColor = when (state) {
-        ConnectionSummary.WORKING -> StatusGreen
-        ConnectionSummary.OFFLINE, ConnectionSummary.BLOCKED, ConnectionSummary.UNREACHABLE -> StatusRed
-        else -> StatusOrange
-    }
-    val statusIcon = when (state) {
-        ConnectionSummary.WORKING -> Icons.Default.CheckCircle
-        ConnectionSummary.OFFLINE -> Icons.Default.WifiOff
-        ConnectionSummary.BLOCKED -> Icons.Default.Block
-        ConnectionSummary.UNREACHABLE -> Icons.Default.ErrorOutline
-        ConnectionSummary.CAPTIVE_PORTAL, ConnectionSummary.DEGRADED -> Icons.Default.WarningAmber
-        else -> Icons.Default.NetworkCheck
-    }
-    val summary = when (state) {
-        ConnectionSummary.WAITING_FOR_NETWORK_STATE -> R.string.connectivity_wait_network_state
-        ConnectionSummary.OFFLINE -> R.string.connectivity_offline
-        ConnectionSummary.CHECKING -> R.string.connectivity_checking
-        ConnectionSummary.CAPTIVE_PORTAL -> R.string.connectivity_captive_portal
-        ConnectionSummary.BLOCKED -> R.string.connectivity_blocked
-        ConnectionSummary.UNCERTAIN -> R.string.connectivity_uncertain
-        ConnectionSummary.WAITING_FOR_TELEGRAM -> R.string.connectivity_wait_telegram
-        ConnectionSummary.WORKING -> R.string.connectivity_working
-        ConnectionSummary.WAITING_FOR_DATA -> R.string.connectivity_wait_data
-        ConnectionSummary.CONNECTING -> R.string.connectivity_connecting
-        ConnectionSummary.RETRYING -> R.string.connectivity_retrying
-        ConnectionSummary.UNREACHABLE -> R.string.connectivity_unreachable
-        ConnectionSummary.DEGRADED -> R.string.connectivity_degraded
-    }
+    val statusColor =
+        when (state) {
+            ConnectionSummary.WORKING -> StatusGreen
+            ConnectionSummary.OFFLINE,
+            ConnectionSummary.BLOCKED,
+            ConnectionSummary.UNREACHABLE -> StatusRed
+            else -> StatusOrange
+        }
+    val statusIcon =
+        when (state) {
+            ConnectionSummary.WORKING -> TablerIcons.CircleCheck
+            ConnectionSummary.OFFLINE -> TablerIcons.WifiOff
+            ConnectionSummary.BLOCKED -> TablerIcons.Ban
+            ConnectionSummary.UNREACHABLE -> TablerIcons.AlertCircle
+            ConnectionSummary.CAPTIVE_PORTAL,
+            ConnectionSummary.DEGRADED -> TablerIcons.AlertTriangle
+            else -> TablerIcons.Network
+        }
+    val summary =
+        when (state) {
+            ConnectionSummary.WAITING_FOR_NETWORK_STATE -> R.string.connectivity_wait_network_state
+            ConnectionSummary.OFFLINE -> R.string.connectivity_offline
+            ConnectionSummary.CHECKING -> R.string.connectivity_checking
+            ConnectionSummary.CAPTIVE_PORTAL -> R.string.connectivity_captive_portal
+            ConnectionSummary.BLOCKED -> R.string.connectivity_blocked
+            ConnectionSummary.UNCERTAIN -> R.string.connectivity_uncertain
+            ConnectionSummary.WAITING_FOR_TELEGRAM -> R.string.connectivity_wait_telegram
+            ConnectionSummary.WORKING -> R.string.connectivity_working
+            ConnectionSummary.WAITING_FOR_DATA -> R.string.connectivity_wait_data
+            ConnectionSummary.CONNECTING -> R.string.connectivity_connecting
+            ConnectionSummary.RETRYING -> R.string.connectivity_retrying
+            ConnectionSummary.UNREACHABLE -> R.string.connectivity_unreachable
+            ConnectionSummary.DEGRADED -> R.string.connectivity_degraded
+        }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = statusColor.copy(alpha = 0.1f)),
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(statusIcon, contentDescription = null, tint = statusColor)
             Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                text = stringResource(summary),
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Text(text = stringResource(summary), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
 
 @Composable
 private fun ConnectionAdviceCard(advice: ConnectionAdvice) {
-    val message = when (advice) {
-        ConnectionAdvice.ENABLE_CLOUDFLARE -> R.string.connection_advice_enable_cf
-        ConnectionAdvice.USE_CLOUDFLARE_FIRST -> R.string.connection_advice_cf_first
-        ConnectionAdvice.USE_DIRECT_FIRST -> R.string.connection_advice_direct_first
-    }
+    val message =
+        when (advice) {
+            ConnectionAdvice.ENABLE_CLOUDFLARE -> R.string.connection_advice_enable_cf
+            ConnectionAdvice.USE_CLOUDFLARE_FIRST -> R.string.connection_advice_cf_first
+            ConnectionAdvice.USE_DIRECT_FIRST -> R.string.connection_advice_direct_first
+        }
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+        colors =
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    Icons.Default.NetworkCheck,
+                    TablerIcons.Network,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onTertiaryContainer,
                 )
@@ -394,16 +414,15 @@ private fun UpdateCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        colors =
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                Icons.Default.SystemUpdate,
+                TablerIcons.DeviceMobileDown,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(28.dp),
@@ -427,8 +446,9 @@ private fun UpdateCard(
                 } else {
                     Text(
                         stringResource(
-                            if (installable) R.string.update_install else R.string.update_open_release,
-                        ),
+                            if (installable) R.string.update_install
+                            else R.string.update_open_release
+                        )
                     )
                 }
             }
@@ -442,45 +462,54 @@ private fun StatusCard(
     config: ProxyConfig,
     uptimeSeconds: Long,
     runtimeRouteMode: RuntimeRouteMode?,
+    controls: @Composable () -> Unit,
 ) {
     val isRunning = serviceState == ProxyServiceState.RUNNING
-    val isTransitioning = serviceState == ProxyServiceState.STARTING ||
+    val isTransitioning =
+        serviceState == ProxyServiceState.STARTING ||
             serviceState == ProxyServiceState.RESTARTING ||
             serviceState == ProxyServiceState.STOPPING
-    val statusColor = when {
-        isRunning -> StatusGreen
-        isTransitioning -> MaterialTheme.colorScheme.primary
-        else -> StatusRed
-    }
+    val statusColor =
+        when {
+            isRunning -> StatusGreen
+            isTransitioning -> MaterialTheme.colorScheme.primary
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = statusColor.copy(alpha = 0.1f),
-        ),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(20.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                modifier = Modifier
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(statusColor),
-            )
-            Spacer(modifier = Modifier.width(12.dp))
+                modifier =
+                    Modifier.size(48.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(statusColor.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    TablerIcons.Server,
+                    contentDescription = null,
+                    tint = statusColor,
+                    modifier = Modifier.size(26.dp),
+                )
+            }
+            Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = when (serviceState) {
-                        ProxyServiceState.STOPPED -> stringResource(R.string.proxy_stopped)
-                        ProxyServiceState.STARTING -> stringResource(R.string.proxy_starting)
-                        ProxyServiceState.RUNNING -> stringResource(R.string.proxy_running)
-                        ProxyServiceState.RESTARTING -> stringResource(R.string.proxy_restarting)
-                        ProxyServiceState.STOPPING -> stringResource(R.string.proxy_stopping)
-                    },
+                    text =
+                        when (serviceState) {
+                            ProxyServiceState.STOPPED -> stringResource(R.string.proxy_stopped)
+                            ProxyServiceState.STARTING -> stringResource(R.string.proxy_starting)
+                            ProxyServiceState.RUNNING -> stringResource(R.string.proxy_running)
+                            ProxyServiceState.RESTARTING ->
+                                stringResource(R.string.proxy_restarting)
+                            ProxyServiceState.STOPPING -> stringResource(R.string.proxy_stopping)
+                        },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -492,36 +521,42 @@ private fun StatusCard(
                 )
                 if (isRunning && config.showDetailedStats && runtimeRouteMode != null) {
                     Text(
-                        text = stringResource(
-                            R.string.runtime_route,
-                            when (runtimeRouteMode) {
-                                RuntimeRouteMode.WS_CF_TCP -> "WS → CF → TCP"
-                                RuntimeRouteMode.WS_TCP_CF -> "WS → TCP → CF"
-                                RuntimeRouteMode.CF_WS_TCP -> "CF → WS → TCP"
-                                RuntimeRouteMode.WS_TCP -> "WS → TCP"
-                            },
-                        ),
+                        text =
+                            stringResource(
+                                R.string.runtime_route,
+                                when (runtimeRouteMode) {
+                                    RuntimeRouteMode.WS_CF_TCP -> "WS → CF → TCP"
+                                    RuntimeRouteMode.WS_TCP_CF -> "WS → TCP → CF"
+                                    RuntimeRouteMode.CF_WS_TCP -> "CF → WS → TCP"
+                                    RuntimeRouteMode.WS_TCP -> "WS → TCP"
+                                },
+                            ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (isRunning && uptimeSeconds > 0) {
+                    Text(
+                        text = stringResource(R.string.proxy_uptime, formatUptime(uptimeSeconds)),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            if (isRunning && uptimeSeconds > 0) {
-                Text(
-                    text = formatUptime(uptimeSeconds),
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = FontFamily.Monospace,
-                    ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         }
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 20.dp),
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
+        controls()
     }
 }
 
 @Composable
-private fun ControlsCard(
+private fun ProxyControls(
     serviceState: ProxyServiceState,
+    proxyEnabled: Boolean,
+    commandFailed: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpenInTelegram: () -> Unit,
@@ -529,29 +564,33 @@ private fun ControlsCard(
     proxyLink: String,
 ) {
     val isActive = serviceState != ProxyServiceState.STOPPED
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            ActionButtons(
-                serviceState = serviceState,
-                onStart = onStart,
-                onStop = onStop,
+    Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+        if (commandFailed) {
+            Text(
+                text = stringResource(R.string.proxy_command_failed),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
             )
-            AnimatedVisibility(
-                visible = isActive,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically(),
-            ) {
-                Column {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    LinkActions(
-                        proxyLink = proxyLink,
-                        onOpenInTelegram = onOpenInTelegram,
-                        onCopyLink = onCopyLink,
-                    )
-                }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+        ActionButtons(
+            serviceState = serviceState,
+            proxyEnabled = proxyEnabled,
+            onStart = onStart,
+            onStop = onStop,
+        )
+        AnimatedVisibility(
+            visible = isActive,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically(),
+        ) {
+            Column {
+                Spacer(modifier = Modifier.height(12.dp))
+                LinkActions(
+                    proxyLink = proxyLink,
+                    onOpenInTelegram = onOpenInTelegram,
+                    onCopyLink = onCopyLink,
+                )
             }
         }
     }
@@ -561,40 +600,74 @@ private fun ControlsCard(
 @Composable
 private fun ActionButtons(
     serviceState: ProxyServiceState,
+    proxyEnabled: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
 ) {
     AnimatedContent(
         targetState = serviceState,
-        transitionSpec = {
-            fadeIn() togetherWith fadeOut()
-        },
+        transitionSpec = { fadeIn() togetherWith fadeOut() },
         label = "action_buttons",
     ) { state ->
         if (state == ProxyServiceState.STOPPED) {
-            Button(
-                onClick = onStart,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(stringResource(R.string.btn_start))
+            Column {
+                if (proxyEnabled) {
+                    Text(
+                        text = stringResource(R.string.proxy_resume_pending),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                Button(
+                    onClick = onStart,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    colors =
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary
+                        ),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    Icon(
+                        TablerIcons.PlayerPlay,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        stringResource(if (proxyEnabled) R.string.btn_retry else R.string.btn_start)
+                    )
+                }
+                if (proxyEnabled) {
+                    TextButton(
+                        onClick = onStop,
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+                    ) {
+                        Text(stringResource(R.string.btn_stop))
+                    }
+                }
             }
         } else {
             val stopping = state == ProxyServiceState.STOPPING
             Button(
                 onClick = onStop,
                 enabled = !stopping,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = StatusRed),
-                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                colors =
+                    ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                    ),
+                shape = RoundedCornerShape(14.dp),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 if (!stopping) {
-                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Icon(
+                        TablerIcons.PlayerStop,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
                     Spacer(modifier = Modifier.width(8.dp))
                 }
                 Text(stringResource(if (stopping) R.string.btn_stopping else R.string.btn_stop))
@@ -604,39 +677,84 @@ private fun ActionButtons(
 }
 
 @Composable
-private fun LinkActions(
-    proxyLink: String,
-    onOpenInTelegram: () -> Unit,
-    onCopyLink: () -> Unit,
-) {
+private fun LinkActions(proxyLink: String, onOpenInTelegram: () -> Unit, onCopyLink: () -> Unit) {
+    var showLink by rememberSaveable { mutableStateOf(false) }
     Button(
         onClick = onOpenInTelegram,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(14.dp),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Text(stringResource(R.string.open_in_telegram))
     }
-    Spacer(modifier = Modifier.height(12.dp))
-    OutlinedTextField(
-        value = proxyLink,
-        onValueChange = {},
-        modifier = Modifier.fillMaxWidth(),
-        readOnly = true,
-        singleLine = true,
-        label = { Text(stringResource(R.string.proxy_link)) },
-        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-        shape = RoundedCornerShape(12.dp),
-        trailingIcon = {
-            IconButton(onClick = onCopyLink) {
-                Icon(
-                    Icons.Default.ContentCopy,
-                    contentDescription = stringResource(R.string.copy_link),
-                )
-            }
-        },
-    )
+    Spacer(modifier = Modifier.height(8.dp))
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier =
+                Modifier.weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClickLabel = stringResource(R.string.view_proxy_link)) {
+                        showLink = true
+                    }
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.proxy_link),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                TablerIcons.InfoCircle,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        IconButton(onClick = onCopyLink) {
+            Icon(
+                TablerIcons.Copy,
+                contentDescription = stringResource(R.string.copy_link),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+        }
+    }
+    if (showLink) {
+        AlertDialog(
+            onDismissRequest = { showLink = false },
+            title = { Text(stringResource(R.string.proxy_link)) },
+            text = {
+                SelectionContainer {
+                    Text(
+                        text = proxyLink,
+                        style =
+                            MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace
+                            ),
+                        modifier =
+                            Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState()),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onCopyLink()
+                        showLink = false
+                    }
+                ) {
+                    Text(stringResource(R.string.copy_link))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLink = false }) { Text(stringResource(R.string.close)) }
+            },
+        )
+    }
 }
 
 private fun formatUptime(seconds: Long): String {
@@ -646,11 +764,14 @@ private fun formatUptime(seconds: Long): String {
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun StatsCard(stats: StatsSnapshot) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors =
+            CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -660,7 +781,6 @@ private fun StatsCard(stats: StatsSnapshot) {
             )
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Row 1: Total, Active, WS, CF
             Row(modifier = Modifier.fillMaxWidth()) {
                 StatItem(
                     label = stringResource(R.string.stats_total),
@@ -672,27 +792,46 @@ private fun StatsCard(stats: StatsSnapshot) {
                     value = stats.connectionsActive.toString(),
                     modifier = Modifier.weight(1f),
                 )
-                StatItem(
-                    label = stringResource(R.string.stats_ws),
-                    value = stats.connectionsWs.toString(),
-                    modifier = Modifier.weight(1f),
-                )
-                StatItem(
-                    label = stringResource(R.string.stats_cf_proxy),
-                    value = stats.connectionsCfProxy.toString(),
-                    modifier = Modifier.weight(1f),
-                )
             }
-
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.stats_transport),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(
+                        R.string.stats_ws to stats.connectionsWs,
+                        R.string.stats_cf_proxy to stats.connectionsCfProxy,
+                        R.string.stats_tcp_fallback to stats.connectionsTcpFallback,
+                    )
+                    .forEach { (label, count) ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainer,
+                            shape = RoundedCornerShape(8.dp),
+                        ) {
+                            Text(
+                                text = "${stringResource(label)}  $count",
+                                style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
+            }
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 12.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+            Text(
+                stringResource(R.string.stats_traffic),
+                style = MaterialTheme.typography.titleSmall,
+            )
             Spacer(modifier = Modifier.height(8.dp))
-
-            // Row 2: TCP, Sent, Recv, Pool
             Row(modifier = Modifier.fillMaxWidth()) {
-                StatItem(
-                    label = stringResource(R.string.stats_tcp_fallback),
-                    value = stats.connectionsTcpFallback.toString(),
-                    modifier = Modifier.weight(1f),
-                )
                 StatItem(
                     label = stringResource(R.string.stats_upload),
                     value = MtProtoConstants.humanBytes(stats.bytesUp),
@@ -703,61 +842,62 @@ private fun StatsCard(stats: StatsSnapshot) {
                     value = MtProtoConstants.humanBytes(stats.bytesDown),
                     modifier = Modifier.weight(1f),
                 )
-                val poolTotal = stats.poolHits + stats.poolMisses
-                val poolStr = if (poolTotal > 0) "${stats.poolHits}/$poolTotal" else "—"
-                StatItem(
-                    label = stringResource(R.string.stats_pool),
-                    value = poolStr,
-                    modifier = Modifier.weight(1f),
-                )
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Error counters use the full row instead of leaving empty grid cells.
-            Row(modifier = Modifier.fillMaxWidth()) {
-                StatItem(
-                    label = stringResource(R.string.stats_bad),
-                    value = stats.connectionsBad.toString(),
-                    modifier = Modifier.weight(1f),
-                    valueColor = if (stats.connectionsBad > 0) StatusOrange else MaterialTheme.colorScheme.primary,
+            HorizontalDivider(
+                modifier = Modifier.padding(vertical = 12.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+            val poolTotal = stats.poolHits + stats.poolMisses
+            val poolStr =
+                if (poolTotal > 0) {
+                    stringResource(R.string.stats_pool_ratio, stats.poolHits, poolTotal)
+                } else "—"
+            listOf(
+                    Triple(R.string.stats_pool, poolStr, false),
+                    Triple(
+                        R.string.stats_bad,
+                        stats.connectionsBad.toString(),
+                        stats.connectionsBad > 0,
+                    ),
+                    Triple(R.string.stats_ws_errors, stats.wsErrors.toString(), stats.wsErrors > 0),
                 )
-                StatItem(
-                    label = stringResource(R.string.stats_ws_errors),
-                    value = stats.wsErrors.toString(),
-                    modifier = Modifier.weight(1f),
-                    valueColor = if (stats.wsErrors > 0) StatusOrange else MaterialTheme.colorScheme.primary,
-                )
-            }
+                .forEach { (label, value, warning) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            stringResource(label),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            value,
+                            style = MaterialTheme.typography.labelLarge,
+                            color =
+                                if (warning) StatusOrange else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
         }
     }
 }
 
 @Composable
-private fun StatItem(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.primary,
-) {
-    Column(
-        modifier = modifier.padding(4.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
+private fun StatItem(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier = modifier.padding(end = 8.dp)) {
         Text(
             text = value,
             style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-            color = valueColor,
-            maxLines = 1,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
         )
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
         )
     }
 }

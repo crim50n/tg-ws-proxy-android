@@ -20,7 +20,6 @@ class ProxyConfigTest {
         assertEquals(false, config.routeProbesEnabled)
         assertEquals(false, config.cfDomainRefreshEnabled)
         assertEquals(180, config.webSocketPingIntervalSeconds)
-        assertEquals(false, config.startOnBoot)
         assertEquals(RuntimeRouteMode.WS_CF_TCP, config.runtimeRouteMode())
     }
 

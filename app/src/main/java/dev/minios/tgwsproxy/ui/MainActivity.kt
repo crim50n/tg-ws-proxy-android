@@ -113,6 +113,8 @@ class MainActivity : ComponentActivity() {
 private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, onUpdateOpened: () -> Unit) {
     val config by viewModel.config.collectAsState()
     val serviceState by viewModel.serviceState.collectAsState()
+    val proxyEnabled by viewModel.proxyEnabled.collectAsState()
+    val commandFailure by viewModel.commandFailure.collectAsState()
     val connectivity by viewModel.connectivityState.collectAsState()
     val runtimeRouteMode by viewModel.runtimeRouteMode.collectAsState()
     val startFailure by viewModel.startFailure.collectAsState()
@@ -169,6 +171,8 @@ private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, 
             MainScreen(
                 config = config,
                 serviceState = serviceState,
+                proxyEnabled = proxyEnabled,
+                commandFailed = commandFailure != null,
                 connectivity = connectivity,
                 runtimeRouteMode = runtimeRouteMode,
                 startFailure = startFailure,
@@ -201,7 +205,6 @@ private fun AppNavigation(viewModel: MainViewModel, pendingUpdateOpen: Boolean, 
                 onAppearanceChange = { appTheme, dynamicColor ->
                     viewModel.updateAppearance(appTheme, dynamicColor)
                 },
-                onStartOnBootChange = viewModel::updateStartOnBoot,
                 onOpenLogs = { currentScreen = Screen.Logs },
             )
         }

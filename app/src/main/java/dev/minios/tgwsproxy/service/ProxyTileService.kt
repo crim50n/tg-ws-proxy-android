@@ -5,6 +5,8 @@ import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.combine
+import dev.minios.tgwsproxy.data.ConfigRepository
 import dev.minios.tgwsproxy.R
 
 /**
@@ -13,33 +15,32 @@ import dev.minios.tgwsproxy.R
 class ProxyTileService : TileService() {
 
     private var scope: CoroutineScope? = null
+    private var enabled: Boolean? = null
 
     override fun onStartListening() {
         super.onStartListening()
+        scope?.cancel()
+        scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
+        scope?.launch {
+            try {
+                combine(ConfigRepository(applicationContext).proxyEnabled, ProxyService.serviceState) { intent, _ -> intent }
+                    .collect {
+                        enabled = it
+                        updateTile()
+                    }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                enabled = null
+                updateTile()
+                dev.minios.tgwsproxy.diagnostics.DiagnosticLogger.failure("tile_intent_read_failed", error)
+            }
+        }
         updateTile()
     }
 
     override fun onClick() {
         super.onClick()
-        when (ProxyService.serviceState.value) {
-            ProxyServiceState.RUNNING,
-            ProxyServiceState.STARTING,
-            ProxyServiceState.RESTARTING -> {
-                ProxyService.stop(applicationContext)
-                updateTile()
-            }
-            ProxyServiceState.STOPPING -> return
-            ProxyServiceState.STOPPED -> {
-                scope?.cancel()
-                scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-                scope?.launch {
-                    ProxyService.start(applicationContext)
-                    // Give the service a moment to start
-                    delay(500)
-                    withContext(Dispatchers.Main) { updateTile() }
-                }
-            }
-        }
+        ProxyService.toggle(applicationContext)
     }
 
     override fun onStopListening() {
@@ -51,12 +52,10 @@ class ProxyTileService : TileService() {
     private fun updateTile() {
         val tile = qsTile ?: return
         val serviceState = ProxyService.serviceState.value
-        tile.state = when (serviceState) {
-            ProxyServiceState.RUNNING -> Tile.STATE_ACTIVE
-            ProxyServiceState.STOPPED -> Tile.STATE_INACTIVE
-            ProxyServiceState.STARTING,
-            ProxyServiceState.RESTARTING,
-            ProxyServiceState.STOPPING -> Tile.STATE_UNAVAILABLE
+        tile.state = when (enabled) {
+            true -> Tile.STATE_ACTIVE
+            false -> Tile.STATE_INACTIVE
+            null -> Tile.STATE_UNAVAILABLE
         }
         tile.label = getString(R.string.app_name)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {

@@ -6,10 +6,9 @@ import org.junit.Test
 
 class BootReceiverTest {
     @Test
-    fun startsOnlyForCompletedBootWhenEnabled() {
-        assertTrue(shouldStartProxyOnBoot(BOOT_COMPLETED_ACTION, enabled = true))
-        assertFalse(shouldStartProxyOnBoot(BOOT_COMPLETED_ACTION, enabled = false))
-        assertFalse(shouldStartProxyOnBoot("android.intent.action.LOCKED_BOOT_COMPLETED", enabled = true))
-        assertFalse(shouldStartProxyOnBoot(null, enabled = true))
+    fun acceptsOnlyCompletedBootForResume() {
+        assertTrue(isProxyBootAction(BOOT_COMPLETED_ACTION))
+        assertFalse(isProxyBootAction("android.intent.action.LOCKED_BOOT_COMPLETED"))
+        assertFalse(isProxyBootAction(null))
     }
 }

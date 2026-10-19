@@ -42,6 +42,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     val serviceState = ProxyService.serviceState
+    val proxyEnabled = configRepo.proxyEnabled
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val commandFailure = ProxyService.commandFailure
     val connectivityState = ProxyService.connectivityState
     val runtimeRouteMode = ProxyService.runtimeRouteMode
     val startFailure = ProxyService.startFailure
@@ -103,10 +106,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissPowerProfileNotice() {
         viewModelScope.launch { configRepo.dismissPowerProfileNotice() }
-    }
-
-    fun updateStartOnBoot(enabled: Boolean) {
-        viewModelScope.launch { configRepo.saveStartOnBoot(enabled) }
     }
 
     fun saveConfig(newConfig: ProxyConfig) {

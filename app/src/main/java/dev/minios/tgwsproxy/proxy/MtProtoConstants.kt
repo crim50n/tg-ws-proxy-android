@@ -62,14 +62,14 @@ object MtProtoConstants {
      * Format byte counters using compact binary units.
      * - All units use 1 decimal place (including GB)
      * - Includes TB support
-     * Python: for unit in ('B','KB','MB','GB'): if abs(n)<1024 return f"{n:.1f}{unit}"; n/=1024; return f"{n:.1f}TB"
+     * Separates the value and unit with a space for readability.
      */
     fun humanBytes(bytes: Long): String {
         var n = bytes.toDouble()
         for (unit in arrayOf("B", "KB", "MB", "GB")) {
-            if (kotlin.math.abs(n) < 1024) return "%.1f%s".format(n, unit)
+            if (kotlin.math.abs(n) < 1024) return "%.1f %s".format(n, unit)
             n /= 1024.0
         }
-        return "%.1fTB".format(n)
+        return "%.1f TB".format(n)
     }
 }

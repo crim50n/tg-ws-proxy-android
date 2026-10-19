@@ -31,6 +31,7 @@ import dev.minios.tgwsproxy.update.UpdatePolicy
 import dev.minios.tgwsproxy.update.UpdateRepository
 import dev.minios.tgwsproxy.update.UpdateState
 import dev.minios.tgwsproxy.data.ConfigRepository
+import dev.minios.tgwsproxy.data.ProxyCommands
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import dev.minios.tgwsproxy.diagnostics.ConnectionAdvice
 import dev.minios.tgwsproxy.diagnostics.analyzeConnectivity
@@ -97,6 +98,7 @@ class ProxyService : Service() {
     private var serverJob: Job? = null
     private var restartJob: Job? = null
     private var stopJob: Job? = null
+    private val destroyed = CompletableDeferred<Unit>()
     private var notificationUpdateJob: Job? = null
     private var updateCheckJob: Job? = null
     private lateinit var updateRepository: UpdateRepository
@@ -122,6 +124,14 @@ class ProxyService : Service() {
     private lateinit var notificationManager: NotificationManager
 
     companion object {
+        private val commandScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        private val _commandFailure = MutableStateFlow<Throwable?>(null)
+        val commandFailure: StateFlow<Throwable?> = _commandFailure.asStateFlow()
+        private val commands = ProxyCommands(commandScope) { error ->
+            Log.e(TAG, "Proxy command failed", error)
+            DiagnosticLogger.failure("proxy_command_failed", error)
+            _commandFailure.value = error
+        }
         private val _runtimeRouteMode = MutableStateFlow<RuntimeRouteMode?>(null)
         val runtimeRouteMode: StateFlow<RuntimeRouteMode?> = _runtimeRouteMode.asStateFlow()
         private val _startFailure = MutableStateFlow<ProxyStartFailure?>(null)
@@ -139,19 +149,59 @@ class ProxyService : Service() {
         val isActive: Boolean get() = _serviceState.value != ProxyServiceState.STOPPED
 
         fun start(context: Context) {
-            if (!_serviceState.value.acceptsStart) return
-            val intent = Intent(context, ProxyService::class.java)
-            context.startForegroundService(intent)
+            val app = context.applicationContext
+            commands.submit {
+                _commandFailure.value = null
+                ConfigRepository(app).saveProxyEnabled(true)
+                launchEnabled(app)
+            }
         }
 
         fun stop(context: Context) {
-            instance?.requestStop()
-                ?: context.stopService(Intent(context, ProxyService::class.java))
+            val app = context.applicationContext
+            commands.submit {
+                _commandFailure.value = null
+                ConfigRepository(app).saveProxyEnabled(false)
+                instance?.requestStop() ?: app.stopService(Intent(app, ProxyService::class.java))
+            }
+        }
+
+        fun toggle(context: Context) {
+            val app = context.applicationContext
+            commands.submit {
+                _commandFailure.value = null
+                val repository = ConfigRepository(app)
+                val enabled = !repository.getProxyEnabled()
+                repository.saveProxyEnabled(enabled)
+                if (enabled) launchEnabled(app)
+                else instance?.requestStop() ?: app.stopService(Intent(app, ProxyService::class.java))
+            }
+        }
+
+        /** Automatic recovery must never manufacture a new user Start. */
+        fun resume(context: Context): Deferred<Unit> {
+            val app = context.applicationContext
+            return commands.submit {
+                if (ConfigRepository(app).getProxyEnabled()) launchEnabled(app)
+            }
+        }
+
+        private suspend fun launchEnabled(context: Context) {
+            val previous = instance
+            if (previous != null && (previous.stopRequested ||
+                    (_serviceState.value == ProxyServiceState.STOPPED && previous.serverJob != null))) {
+                // Do not deliver a new Start to an instance whose stopSelf is still pending.
+                withTimeout(8_000L) { previous.destroyed.await() }
+            }
+            if (!_serviceState.value.acceptsStart) return
+            context.startForegroundService(Intent(context, ProxyService::class.java))
         }
 
         fun restart(context: Context) {
-            if (!_serviceState.value.acceptsRestart) return
-            instance?.requestRestart() ?: start(context)
+            val app = context.applicationContext
+            commands.submit {
+                if (ConfigRepository(app).getProxyEnabled()) instance?.requestRestart()
+            }
         }
     }
 
@@ -173,12 +223,16 @@ class ProxyService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 DiagnosticLogger.event("notification_stop_requested")
-                requestStop()
+                stop(applicationContext)
                 return START_NOT_STICKY
             }
             ACTION_RESTART -> {
                 DiagnosticLogger.event("notification_restart_requested")
-                requestRestart()
+                restart(applicationContext)
+                if (!_serviceState.value.acceptsRestart) {
+                    if (_serviceState.value == ProxyServiceState.STOPPED) stopSelfResult(startId)
+                    return START_NOT_STICKY
+                }
                 return START_STICKY
             }
             ACTION_RESTORE_NOTIFICATION -> {
@@ -200,39 +254,52 @@ class ProxyService : Service() {
                     )
                     return START_STICKY
                 }
+                if (_serviceState.value == ProxyServiceState.STOPPED) stopSelfResult(startId)
                 return START_NOT_STICKY
             }
         }
 
-        if (stopRequested || _serviceState.value == ProxyServiceState.STOPPING) {
-            stopSelfResult(startId)
+        // Meet the foreground deadline before any asynchronous persistence read, including
+        // null sticky intents. Runtime startup still goes through the ordered intent gate.
+        val notification = buildNotification(notificationHost, notificationPort)
+        try {
+            startForeground(NOTIFICATION_ID, notification)
+        } catch (error: Exception) {
+            Log.e(TAG, "Unable to enter foreground", error)
+            DiagnosticLogger.failure("proxy_foreground_failed", error)
+            _commandFailure.value = error
+            requestStop()
             return START_NOT_STICKY
         }
-
-        if (serverJob?.isActive == true) {
-            Log.w(TAG, "Server already running, ignoring start command")
-            return START_STICKY
+        commands.submit {
+            if (instance !== this@ProxyService || stopRequested) return@submit
+            val enabled = ConfigRepository(applicationContext).getProxyEnabled()
+            synchronized(runtimeOwnershipLock) {
+                if (instance !== this@ProxyService || stopRequested) return@submit
+                if (!enabled) {
+                    requestStop()
+                } else if (_serviceState.value.acceptsStart && serverJob?.isActive != true) {
+                    _serviceState.value = ProxyServiceState.STARTING
+                    startProxyRuntime()
+                }
+            }
+        }.invokeOnCompletion { error ->
+            if (error != null) commandScope.launch {
+                if (instance === this@ProxyService) requestStop()
+            }
         }
-
-        stopRequested = false
-        _serviceState.value = ProxyServiceState.STARTING
-        val notification = buildNotification(notificationHost, notificationPort)
-        startForeground(NOTIFICATION_ID, notification)
-        startProxyRuntime()
 
         return START_STICKY
     }
 
-    private fun startProxyRuntime() {
-        if (serverJob?.isActive == true || stopRequested) return
+    private fun startProxyRuntime() = synchronized(runtimeOwnershipLock) {
+        if (serverJob?.isActive == true || stopRequested || instance !== this) return@synchronized
         _startFailure.value = null
 
         serviceScope?.cancel()
         serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-        val runtimeId = synchronized(runtimeOwnershipLock) {
-            (++runtimeGeneration).also { activeRuntimeId = it }
-        }
+        val runtimeId = (++runtimeGeneration).also { activeRuntimeId = it }
         val connectivity = ConnectivityTracker()
         runtimeConnectivity = connectivity
         serverJob = serviceScope?.launch {
@@ -252,6 +319,9 @@ class ProxyService : Service() {
                 connectivity.updateNetwork(initialNetwork?.networkHandle, initialStatus)
                 val configurationEpoch = connectivity.state.value.epoch
                 val carriedAdvice = synchronized(runtimeOwnershipLock) {
+                    if (stopRequested || activeRuntimeId != runtimeId || instance !== this@ProxyService) {
+                        throw CancellationException("Runtime ownership was revoked during configuration")
+                    }
                     automaticRouteOverride?.takeIf {
                         it.decision.canCarryTo(initialNetwork?.networkHandle, initialStatus)
                     }.also { automaticRouteOverride = it }
@@ -265,45 +335,45 @@ class ProxyService : Service() {
                     savedConfig
                 }
                 val config = routedConfig.withRuntimeConnectionPreferences()
-                notificationManager.cancel(ADVICE_NOTIFICATION_ID)
-                _runtimeRouteMode.value = config.runtimeRouteMode()
-                DiagnosticLogger.event(
-                    "runtime_starting",
-                    "port" to config.port,
-                    "poolSize" to config.poolSize,
-                    "bufferKb" to config.bufferSize / 1024,
-                    "cfEnabled" to config.cfProxyEnabled,
-                    "cfBeforeTcp" to config.cfProxyPriority,
-                    "cfFirst" to config.cfProxyFirst,
-                    "autoOptimize" to config.autoOptimizeConnection,
-                    "keepCpuAwake" to config.keepCpuAwake,
-                    "preconnectWs" to config.preconnectWebSockets,
-                    "routeProbes" to config.routeProbesEnabled,
-                    "cfRefresh" to config.cfDomainRefreshEnabled,
-                    "wsPingSeconds" to config.webSocketPingIntervalSeconds,
-                    "notificationTraffic" to config.showTrafficInNotification,
-                    "redirectCount" to config.dcRedirects.size,
-                    "runtimeId" to runtimeId,
-                )
-                // Update notification with actual config
-                updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
-
                 // Start server
                 val srv = TgWsProxyServer(config, connectivity)
                 srv.onStatusChange = { running ->
-                    if (running && !stopRequested && activeRuntimeId == runtimeId) {
-                        _serviceState.value = ProxyServiceState.RUNNING
-                        _startFailure.value = null
-                        updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
-                        if (config.routeProbesEnabled) startRouteProbe(config, runtimeId)
-                        startUpdateChecks(runtimeId)
+                    synchronized(runtimeOwnershipLock) {
+                        if (running && !stopRequested && activeRuntimeId == runtimeId && instance === this@ProxyService) {
+                            _serviceState.value = ProxyServiceState.RUNNING
+                            _startFailure.value = null
+                            updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
+                            if (config.routeProbesEnabled) startRouteProbe(config, runtimeId)
+                            startUpdateChecks(runtimeId)
+                        }
                     }
                 }
 
                 synchronized(runtimeOwnershipLock) {
-                    if (stopRequested || activeRuntimeId != runtimeId) {
+                    if (stopRequested || activeRuntimeId != runtimeId || instance !== this@ProxyService) {
                         throw CancellationException("Runtime ownership was revoked before startup")
                     }
+                    DiagnosticLogger.event(
+                        "runtime_starting",
+                        "port" to config.port,
+                        "poolSize" to config.poolSize,
+                        "bufferKb" to config.bufferSize / 1024,
+                        "cfEnabled" to config.cfProxyEnabled,
+                        "cfBeforeTcp" to config.cfProxyPriority,
+                        "cfFirst" to config.cfProxyFirst,
+                        "autoOptimize" to config.autoOptimizeConnection,
+                        "keepCpuAwake" to config.keepCpuAwake,
+                        "preconnectWs" to config.preconnectWebSockets,
+                        "routeProbes" to config.routeProbesEnabled,
+                        "cfRefresh" to config.cfDomainRefreshEnabled,
+                        "wsPingSeconds" to config.webSocketPingIntervalSeconds,
+                        "notificationTraffic" to config.showTrafficInNotification,
+                        "redirectCount" to config.dcRedirects.size,
+                        "runtimeId" to runtimeId,
+                    )
+                    notificationManager.cancel(ADVICE_NOTIFICATION_ID)
+                    _runtimeRouteMode.value = config.runtimeRouteMode()
+                    updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
                     if (config.keepCpuAwake) acquireWakeLock()
                     if (config.cfProxyEnabled && config.cfDomainRefreshEnabled) {
                         CfProxyDomains.startBackgroundRefresh()
@@ -311,7 +381,7 @@ class ProxyService : Service() {
                     ownedServer = srv
                     server = srv
                     registerNetworkCallback(runtimeId, connectivity)
-                    startNotificationUpdates(config.host, config.port, config.showTrafficInNotification)
+                    startNotificationUpdates(config.host, config.port, config.showTrafficInNotification, runtimeId)
                 }
                 launch {
                     var appliedEpoch = configurationEpoch
@@ -368,17 +438,16 @@ class ProxyService : Service() {
                 DiagnosticLogger.event("runtime_cancelled")
             } catch (e: ProxyPortInUseException) {
                 Log.e(TAG, "Proxy port ${e.port} is already in use")
-                _startFailure.value = ProxyStartFailure.PortInUse(e.port)
                 DiagnosticLogger.event(
                     "listener_bind_failed",
                     "port" to e.port,
                     "reason" to "port_in_use",
                 )
-                if (!stopRequested) stopAfterRuntimeFailure()
+                requestStop(failedRuntimeId = runtimeId, failure = ProxyStartFailure.PortInUse(e.port))
             } catch (e: Exception) {
                 Log.e(TAG, "Server failed: ${e.message}", e)
                 DiagnosticLogger.failure("runtime_failed", e)
-                if (!stopRequested) stopAfterRuntimeFailure()
+                requestStop(failedRuntimeId = runtimeId)
             } finally {
                 connectivity.stop()
                 synchronized(runtimeOwnershipLock) {
@@ -403,13 +472,6 @@ class ProxyService : Service() {
                 DiagnosticLogger.event("runtime_completed", "runtimeId" to runtimeId)
             }
         }
-    }
-
-    private fun stopAfterRuntimeFailure() {
-        stopUpdateChecks()
-        _serviceState.value = ProxyServiceState.STOPPED
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
 
     private suspend fun stopProxyRuntime(): Boolean {
@@ -472,6 +534,7 @@ class ProxyService : Service() {
             runtimeMutex.withLock {
                 if (stopRequested) return@withLock
                 synchronized(runtimeOwnershipLock) {
+                    if (stopRequested || instance !== this@ProxyService) return@withLock
                     if (advice != null) {
                         if (runtimeConnectivity !== advice.tracker ||
                             !advice.decision.appliesTo(activeRuntimeId, advice.tracker.state.value)
@@ -479,19 +542,23 @@ class ProxyService : Service() {
                         automaticRouteOverride = advice
                         DiagnosticLogger.event("connection_advice_applied", "advice" to advice.advice.name, "source" to "automatic")
                     } else if (resetAutomaticRoute) automaticRouteOverride = null
+                    _serviceState.value = ProxyServiceState.RESTARTING
+                    updateNotification(notificationHost, notificationPort, restarting = true)
                 }
-                _serviceState.value = ProxyServiceState.RESTARTING
                 Log.i(TAG, "Restarting proxy runtime...")
                 DiagnosticLogger.event("runtime_restarting")
-                updateNotification(notificationHost, notificationPort, restarting = true)
                 val stopped = stopProxyRuntime()
                 if (!stopped) {
-                    stopRequested = true
-                    stopUpdateChecks()
-                    _serviceState.value = ProxyServiceState.STOPPED
                     withContext(Dispatchers.Main.immediate) {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf()
+                        synchronized(runtimeOwnershipLock) {
+                            if (instance === this@ProxyService) {
+                                stopRequested = true
+                                stopUpdateChecks()
+                                _serviceState.value = ProxyServiceState.STOPPED
+                                stopForeground(STOP_FOREGROUND_REMOVE)
+                                stopSelf()
+                            }
+                        }
                     }
                     return@withLock
                 }
@@ -509,14 +576,17 @@ class ProxyService : Service() {
             advice = AutomaticAdvice(advice, tracker, NetworkDecision(runtimeId, epoch, tracker.state.value.networkId)))
     }
 
-    private fun requestStop() {
-        if (stopRequested) return
+    private fun requestStop(failedRuntimeId: Long? = null, failure: ProxyStartFailure? = null) = synchronized(runtimeOwnershipLock) {
+        if (instance !== this || stopRequested) return@synchronized
+        if (failedRuntimeId != null && activeRuntimeId != failedRuntimeId) return@synchronized
+        // Claim teardown and publish failure atomically with runtime ownership. The lifecycle
+        // job below joins/stops the runtime under runtimeMutex, never on its failing thread.
         stopRequested = true
         runtimeConnectivity?.stop()
         _connectivityState.value = ConnectivitySnapshot(stopped = true)
         stopUpdateChecks()
         _serviceState.value = ProxyServiceState.STOPPING
-        _startFailure.value = null
+        _startFailure.value = failure
         DiagnosticLogger.event("service_stop_requested")
         restartJob?.cancel()
         networkChangeJob?.cancel()
@@ -527,10 +597,14 @@ class ProxyService : Service() {
             }
             DiagnosticLogger.event("service_stopped")
             withContext(Dispatchers.IO) { DiagnosticLogger.flush(timeoutMs = 1_000L) }
-            _serviceState.value = ProxyServiceState.STOPPED
             withContext(Dispatchers.Main.immediate) {
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                synchronized(runtimeOwnershipLock) {
+                    if (instance === this@ProxyService && stopRequested) {
+                        _serviceState.value = ProxyServiceState.STOPPED
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                    }
+                }
             }
         }
     }
@@ -558,20 +632,23 @@ class ProxyService : Service() {
     }
 
     override fun onDestroy() {
+        synchronized(runtimeOwnershipLock) { stopRequested = true }
         Log.i(TAG, "Service destroying...")
         DiagnosticLogger.event("service_destroying")
         restartJob?.cancel()
         restartJob = null
         stopJob?.cancel()
         stopJob = null
-        stopRequested = true
         stopProxyRuntimeNow()
         lifecycleScope.cancel()
         lifecycleDispatcher.close()
         runtimeStopExecutor.shutdown()
-        instance = null
-        _serviceState.value = ProxyServiceState.STOPPED
+        if (instance === this) {
+            instance = null
+            _serviceState.value = ProxyServiceState.STOPPED
+        }
         super.onDestroy()
+        destroyed.complete(Unit)
     }
 
     @SuppressLint("WakelockTimeout")
@@ -721,12 +798,16 @@ class ProxyService : Service() {
         routeProbeJob = null
     }
 
-    private fun startNotificationUpdates(host: String, port: Int, showTraffic: Boolean) {
+    private fun startNotificationUpdates(host: String, port: Int, showTraffic: Boolean, runtimeId: Long) {
         if (!showTraffic || notificationUpdateJob?.isActive == true) return
         notificationUpdateJob = serviceScope?.launch {
             while (isActive) {
                 delay(5_000)
-                updateNotification(host, port, showTraffic = true)
+                synchronized(runtimeOwnershipLock) {
+                    if (!stopRequested && activeRuntimeId == runtimeId && instance === this@ProxyService) {
+                        updateNotification(host, port, showTraffic = true)
+                    }
+                }
             }
         }
     }

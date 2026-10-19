@@ -3,36 +3,25 @@ package dev.minios.tgwsproxy.service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import dev.minios.tgwsproxy.data.ConfigRepository
-import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 internal const val BOOT_COMPLETED_ACTION = "android.intent.action.BOOT_COMPLETED"
 
-internal fun shouldStartProxyOnBoot(action: String?, enabled: Boolean): Boolean {
-    return action == BOOT_COMPLETED_ACTION && enabled
-}
+internal fun isProxyBootAction(action: String?): Boolean = action == BOOT_COMPLETED_ACTION
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != BOOT_COMPLETED_ACTION) return
+        if (!isProxyBootAction(intent.action)) return
         val pendingResult = goAsync()
-        val appContext = context.applicationContext
-        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+        val resume = ProxyService.resume(context)
+        CoroutineScope(Dispatchers.Default + SupervisorJob()).launch {
             try {
-                withTimeout(8_000L) {
-                    val enabled = ConfigRepository(appContext).getConfig().startOnBoot
-                    DiagnosticLogger.event("boot_completed", "startEnabled" to enabled)
-                    if (shouldStartProxyOnBoot(intent.action, enabled)) {
-                        ProxyService.start(appContext)
-                    }
-                }
-            } catch (error: Exception) {
-                DiagnosticLogger.failure("boot_start_failed", error)
+                // Bound receiver lifetime, not the process-owned command's lifetime.
+                withTimeoutOrNull(8_000L) { resume.join() }
             } finally {
                 pendingResult.finish()
             }

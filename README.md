@@ -1,225 +1,132 @@
-# TG WS Proxy for Android
+<p align="center">
+  <a href="https://github.com/crim50n/tg-ws-proxy-android/releases/latest"><img src="https://img.shields.io/github/v/release/crim50n/tg-ws-proxy-android?style=flat-square&amp;label=release&amp;color=167DA7" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/Android-8.0%2B-167DA7?style=flat-square&amp;logo=android&amp;logoColor=white" alt="Android 8.0 or newer">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-167DA7?style=flat-square" alt="MIT license"></a>
+</p>
 
-Native on-device MTProto proxy for Telegram. The app listens on
-`127.0.0.1:1443`, authenticates clients with a generated MTProto secret, and
-relays traffic to Telegram data centers over TLS WebSocket connections. If the
-direct WebSocket route is unavailable, it can use a Cloudflare proxy domain or
-fall back to direct TCP.
+<p align="center">
+  <img src="screenshots/2.0.0/cover.jpg" width="100%" alt="An illustrated terrace with a visual connection from Android through WebSocket to Telegram">
+</p>
 
-Telegram is configured through a standard `tg://proxy` link. The app does not
-require root, an external proxy server, an account, analytics, or ads.
+<h1 align="center">TG WS Proxy</h1>
 
-## Features
+<p align="center">
+  <strong>A local bridge to Telegram, right on your Android.</strong><br>
+  MTProto over WebSocket, with Cloudflare and direct TCP fallback.<br>
+  No root. No separate server to deploy. No ads or analytics.
+</p>
 
-- Native Kotlin proxy engine with MTProto AES-CTR re-encryption
-- Direct WebSocket transport with per-DC connection pools
-- Validated Cloudflare domain pool with per-DC sticky balancing
-- Configurable Cloudflare-first or TCP-first fallback order
-- Optional Cloudflare-first routing for every Telegram DC
-- Automatic per-network route selection with lightweight direct/Cloudflare/TCP probes
-- Route-aware direct WebSocket pooling and automatic reset after network changes
-- Foreground service, wake lock, notification restart/stop actions, and Quick Settings tile
-- Abridged, intermediate, and padded-intermediate MTProto framing
-- English and Russian UI
-- Optional detailed connection, traffic, route, error, and pool statistics
-- In-memory live connection log and explicit five-minute diagnostic report export
-- System, Light, Dark, and Android 12+ Material You appearance
-- Built-in English and Russian help for routing and diagnostics
-- Daily update notification with a static repository manifest fallback
-- Strict configuration validation and persistent DataStore settings
+<p align="center">
+  <a href="https://github.com/crim50n/tg-ws-proxy-android/releases/latest"><img src="https://img.shields.io/badge/Download-APK-167DA7?style=for-the-badge&amp;logo=android&amp;logoColor=white&amp;labelColor=167DA7" alt="Download APK"></a>
+  <a href="#quick-start"><img src="https://img.shields.io/badge/Quick_start-263746?style=for-the-badge" alt="Quick start"></a>
+  <a href="release-notes/"><img src="https://img.shields.io/badge/Release_notes-263746?style=for-the-badge" alt="Release notes"></a>
+</p>
 
-## Requirements
+## Simple to Use. Flexible When Needed.
 
-- Android 8.0 or newer (API 26+)
-- No root access
-- JDK 17 for source builds
+- **Adaptive routing.** Automatic route selection, with manual WebSocket, Cloudflare,
+  and TCP controls when you need them.
+- **Quiet defaults.** Extra route checks, prepared connections, and CPU wake lock
+  are off by default. Background controls remain available.
+- **Clear status.** Local service and Telegram connectivity are shown separately,
+  alongside optional traffic statistics and diagnostic logs.
+- **Native Android interface.** Notification controls, a Quick Settings tile,
+  light and dark themes, Material You, and English / Russian localization.
 
-## Usage
+## Screenshots
 
-1. Install the APK and open TG WS Proxy.
-2. Start the proxy from the app or the Quick Settings tile.
-3. Tap **Open in Telegram**, or copy the generated `tg://proxy` link.
-4. Confirm the MTProto proxy in Telegram.
+<table>
+  <tr>
+    <th width="33%">Connect</th>
+    <th width="33%">Monitor</th>
+    <th width="33%">Configure</th>
+  </tr>
+  <tr>
+    <td valign="top"><a href="screenshots/2.0.0/main-dark.jpg"><img src="screenshots/2.0.0/main-dark.jpg" width="100%" alt="Dark theme with the local proxy running and Telegram connected"></a></td>
+    <td valign="top"><a href="screenshots/2.0.0/statistics.jpg"><img src="screenshots/2.0.0/statistics.jpg" width="100%" alt="Connection status, transport counters, traffic, and errors"></a></td>
+    <td valign="top"><a href="screenshots/2.0.0/settings.jpg"><img src="screenshots/2.0.0/settings.jpg" width="100%" alt="Local proxy, routing, and power settings"></a></td>
+  </tr>
+</table>
 
-Optional startup after device boot is available in Settings and is disabled by
-default. Android and device-vendor background restrictions can affect delivery.
+<details>
+  <summary>Light theme, Help, and About</summary>
+  <br>
+  <p align="center">
+    <a href="screenshots/2.0.0/main.jpg"><img src="screenshots/2.0.0/main.jpg" width="31%" alt="Light theme with local proxy status and Telegram connection controls"></a>
+    &nbsp;
+    <a href="screenshots/2.0.0/help.jpg"><img src="screenshots/2.0.0/help.jpg" width="31%" alt="Expandable help with setup instructions and troubleshooting"></a>
+    &nbsp;
+    <a href="screenshots/2.0.0/about.jpg"><img src="screenshots/2.0.0/about.jpg" width="31%" alt="About screen with update checks and transport limitations"></a>
+  </p>
+</details>
 
-The default listener is local-only. Binding to `0.0.0.0` exposes the proxy to
-the local network; clients still need the generated secret.
+## Quick Start
 
-## Configuration
+1. [Install the latest APK](https://github.com/crim50n/tg-ws-proxy-android/releases/latest)
+   on Android 8.0 or newer.
+2. Open the app and tap **Connect**.
+3. Tap **Open in Telegram**, then confirm and select the proxy.
+4. Open a chat to check the connection.
 
-| Setting | Default | Description |
-|---|---|---|
-| Host | `127.0.0.1` | Local listen address or hostname |
-| Port | `1443` | MTProto listener port |
-| Secret | Random | Persisted 16-byte secret shown as 32 hexadecimal characters |
-| Automatic connection mode | Enabled | Selects a temporary route for the current network without overwriting manual settings |
-| DC redirects | DC 2 and 4 | Manual-mode `DC:IP` WebSocket target mappings |
-| CF proxy | Enabled, before TCP | Manual-mode Cloudflare fallback before direct TCP |
-| CF first | Disabled | Manual-mode Cloudflare priority for every Telegram DC |
-| Pool size | `4` | Manual-mode pre-established connections per DC and media mode, `0..16` |
-| Buffer size | `256 KB` | Manual-mode socket buffer size, `4..4096 KB` |
+The default listener is **`127.0.0.1:1443`**, accessible only on this device.
+Settings save automatically; changed runtime settings take effect when you leave
+Settings, restarting an active proxy if needed.
 
-Automatic mode starts each proxy run and network with `WS -> CF -> TCP`, a
-256 KB socket buffer, and a direct WebSocket pool of 4. When it selects
-`CF -> WS -> TCP`, direct pool warmup is disabled. Turn automatic mode off to
-show all manual routing, server, buffer, and pool controls.
+**Your last choice is remembered.** An enabled proxy attempts to resume after
+device boot. Stopping it from the app, notification, or Quick Settings keeps it
+off. Android force-stop and battery restrictions can prevent background startup.
 
-Settings are saved automatically. Leaving Settings restarts a running proxy
-only when effective connection settings changed.
+## Updates and Support
 
-Prepared connections are disabled by the default power profile, regardless of the
-configured pool size. When enabled, idle sockets rotate at expiration and failed
-refills retry with backoff; there is no periodic pool polling loop.
+Check for updates in **About**. In-app downloads are verified against the
+published SHA-256 checksum, package identity, version, and installed signing
+certificate before Android asks you to confirm installation.
 
-### Automatic Connection Mode
+For connection problems, start with the built-in **Help**. If the problem persists,
+[open an issue](https://github.com/crim50n/tg-ws-proxy-android/issues) with your
+Android version, network type, and steps to reproduce. Diagnostic reports are
+available under **Settings → Support and diagnostics**; review them before sharing,
+even though recognized sensitive data is redacted.
 
-Automatic connection mode is enabled by default. Each proxy start and each
-validated network handover begins with this route order:
+## Security
 
-```text
-WS -> Cloudflare -> TCP
-```
+This is a Telegram proxy, **not a device-wide VPN or an anonymity guarantee**.
+It runs locally but connects to remote endpoints. Telegram message encryption is
+separate from the proxy transport.
 
-When route probes are enabled, the app runs two lightweight direct WebSocket,
-Cloudflare, and TCP reachability rounds for DC 2 and DC 4. They are disabled by
-the default power profile. Results are isolated by runtime and network epoch so
-delayed observations cannot change a replacement connection. Probes do not
-contain Telegram account data and are not included in user traffic counters.
+WebSocket TLS certificate verification is intentionally disabled; do not treat
+it as an authenticated TLS channel. Direct TCP fallback adds no TLS layer.
+Keep the default local address unless you intend to share access: `0.0.0.0`
+listens on all IPv4 interfaces. Keep your proxy link and secret private.
 
-Repeated direct failures with successful Cloudflare checks can temporarily
-select `Cloudflare -> WS -> TCP` for the current runtime. Any successful direct
-WebSocket observation prevents that automatic switch. Automatic decisions are
-not written to DataStore and do not overwrite manual settings. The effective
-route order is displayed on the main screen only when detailed statistics are enabled.
+## Development
 
-Automatic mode also watches active direct WebSocket media sessions. If a media
-session sends requests without receiving data, the app closes the stalled
-connection and routes that datacenter's media retries through Cloudflare for one
-minute. A repeated stall after a direct retry extends the override to ten
-minutes. Other datacenters and regular Telegram sessions keep their current
-route. This per-session fallback resets on a proxy restart or network change and
-is disabled in manual mode.
+<details>
+<summary>Build from source</summary>
 
-Automatic performance defaults are route-aware:
-
-- `WS -> Cloudflare -> TCP`: 256 KB socket buffer and direct WS pool size 4
-- `Cloudflare -> WS -> TCP`: 256 KB socket buffer and direct WS pool disabled
-
-Turn automatic connection mode off to expose every manual routing, server,
-Cloudflare domain, buffer, and pool setting. In manual mode the app may display
-a recommendation in the interface, but it never applies the recommendation or
-restarts the proxy because of it.
-
-### Connection Status
-
-The main screen shows one short status with an icon and color indication. It
-distinguishes network loss, Wi-Fi sign-in, Android restrictions, unconfirmed
-internet access, and Telegram connection problems without listing technical routes.
-Material You colors are off by default; existing saved appearance choices remain.
-
-Missing Android internet validation does not automatically mean the network is
-offline: actual Telegram responses can confirm connectivity. A transport handshake
-alone is not reported as a working Telegram connection. Outage errors and old
-network results are excluded from automatic routing decisions. The local service
-keeps running while waiting for a network. No periodic internet tests or extra
-network-outage notifications are added.
-
-### Diagnostics
-
-Diagnostics are always collected using a bounded queue and a separate writer.
-The Connection log shows the latest 300 redacted events. Stored logs rotate and
-retain entries for seven days. Exports use separate immutable files and redact
-proxy links, secrets, addresses, and private endpoint fields.
-
-## Update Checks
-
-The app checks the repository's latest GitHub Release at most once every 24
-hours. If the API is unavailable or rate-limited, it falls back to
-[`update.json`](update.json) from the `master` branch. A manual check is also
-available on the About screen.
-
-While the proxy service is running, it also checks for updates within the same
-24-hour interval and can show a quiet notification once per version. No update
-jobs or alarms run after the service stops. Notifications survive internal proxy
-restarts and are removed when the service stops. A notification tap opens the
-About screen without starting a download; an open Settings draft is preserved.
-
-The manifest includes version identifiers and validated release, APK, and checksum
-URLs for this repository. Users can explicitly download a SHA-256-verified APK
-and open Android's installer, or open the release page. Android continues to
-enforce the application signing certificate during installation.
-
-For a release, update the literal version assignments in `app/build.gradle.kts`
-and the matching values and tag URL in `update.json` before publishing the tag.
-
-## Transport Behavior
-
-The default traffic path is:
-
-```text
-Telegram -> local MTProto listener -> direct WSS -> Cloudflare WSS -> Telegram TCP
-```
-
-The direct WebSocket path connects to the configured redirect IP while using a
-Telegram domain for TLS SNI and the HTTP `Host` header. WebSocket frames and
-buffered MTProto packets are limited to 16 MiB to prevent unbounded allocation.
-Pools and active sessions are discarded after a validated Wi-Fi, cellular, VPN,
-or Ethernet handover so connections from the previous network cannot be reused.
-Automatic mode then starts from the default route order and reevaluates the new
-network. Manual mode keeps the configured route and rebuilds only its direct WS
-pool.
-
-TLS certificate verification for proxy WebSocket traffic is intentionally
-disabled to preserve the upstream transport behavior used for IP redirection
-and censorship bypass. SNI, WebSocket upgrade validation, frame validation,
-and `Sec-WebSocket-Accept` verification are still enforced. Do not change this
-trust model without testing all direct and Cloudflare routes.
-
-## Building
+Use JDK 17 and the checked-in Gradle wrapper:
 
 ```bash
-# Unit tests
-./gradlew :app:testDebugUnitTest
-
-# Android lint
-./gradlew :app:lintDebug
-
-# Development APK
+./gradlew :app:testDebugUnitTest :app:lintDebug
 ./gradlew :app:assembleDebug
-
-# Minified release APK
 ./gradlew :app:assembleRelease
 ```
 
-Build outputs:
+APKs are written to `app/build/outputs/apk/debug/` and
+`app/build/outputs/apk/release/`. Debug builds install separately as
+`dev.minios.tgwsproxy.debug`.
 
-- Debug: `app/build/outputs/apk/debug/app-debug.apk`
-- Release: `app/build/outputs/apk/release/app-release.apk`
+Release signing requires the ignored `app/keystore/signing.properties` and its
+keystore. Never commit signing files.
 
-Release signing is enabled only when ignored file
-`app/keystore/signing.properties` and its referenced keystore are present.
-GitHub release builds require the configured signing secrets.
-
-## Architecture
-
-- `ui/`: Compose screens and view model
-- `data/ConfigRepository.kt`: Preferences DataStore persistence
-- `service/ProxyService.kt`: Android foreground-service lifecycle
-- `proxy/TgWsProxyServer.kt`: listener and client-session lifecycle
-- `proxy/Bridge.kt`: upstream selection and bidirectional re-encryption
-- `proxy/RawWebSocket.kt`: custom TLS/RFC 6455 transport
-- `proxy/WsPool.kt`: pre-established direct WebSocket connections
-- `proxy/CfProxyDomains.kt`: validated Cloudflare domain management
+</details>
 
 ## Credits
 
-Maintained by [crim50n](https://github.com/crim50n).
+Maintained by [crim50n](https://github.com/crim50n). Inspired by
+[Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy), developed
+independently. Not an official Telegram product.
 
-Inspired by [tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy) by Flowseal.
-This Android implementation is maintained independently.
-
-## License
-
-[MIT License](LICENSE)
+Icons by [Tabler](https://github.com/tabler/tabler-icons), Paweł Kuna and
+contributors ([MIT](app/src/main/assets/licenses/tabler-icons.txt)).
+Project licensed under [MIT](LICENSE).
