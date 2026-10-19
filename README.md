@@ -4,6 +4,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-167DA7?style=flat-square" alt="MIT license"></a>
 </p>
 
+<p align="center"><strong>English</strong> &nbsp; / &nbsp; <a href="README.ru.md">Русский</a></p>
+
 <p align="center">
   <img src="screenshots/2.0.0/cover.jpg" width="100%" alt="An illustrated terrace with a visual connection from Android through WebSocket to Telegram">
 </p>
