@@ -3,7 +3,7 @@ package dev.minios.tgwsproxy.proxy
 import android.os.SystemClock
 import dev.minios.tgwsproxy.diagnostics.DiagnosticLogger
 import java.util.ArrayDeque
-import javax.net.ssl.SSLSocket
+import java.net.Socket
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 
@@ -14,7 +14,7 @@ class WsPool internal constructor(
     private val bufferSize: Int,
     private val clock: () -> Long,
     private val dispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val connector: ((String, List<String>, (SSLSocket) -> Unit) -> RawWebSocket?)? = null,
+    private val connector: ((String, List<String>, (Socket) -> Unit) -> RawWebSocket?)? = null,
 ) {
     constructor(
         poolSize: Int = 4,
@@ -25,7 +25,7 @@ class WsPool internal constructor(
     private data class PooledConnection(val ws: RawWebSocket, val createdAt: Long)
     private class Bucket(val dc: Int, val isMedia: Boolean, val targetIp: String) {
         val idle = ArrayDeque<PooledConnection>()
-        val pending = mutableSetOf<SSLSocket>()
+        val pending = mutableSetOf<Socket>()
         val wake = Channel<Unit>(Channel.CONFLATED)
         var job: Job? = null
         var failures = 0
@@ -179,11 +179,11 @@ class WsPool internal constructor(
             repeat(needed) {
                 launch(dispatcher) {
                     var ws: RawWebSocket? = null
-                    var socket: SSLSocket? = null
+                    var socket: Socket? = null
                     var adopted = false
                     try {
                         ensureActive()
-                        val onSocketCreated: (SSLSocket) -> Unit = { created ->
+                        val onSocketCreated: (Socket) -> Unit = { created ->
                             synchronized(lock) {
                                 socket?.let { bucket.pending.remove(it) }
                                 socket = created
@@ -244,7 +244,7 @@ class WsPool internal constructor(
         }
     }
 
-    private fun connectOne(targetIp: String, domains: List<String>, onSocketCreated: (SSLSocket) -> Unit): RawWebSocket? {
+    private fun connectOne(targetIp: String, domains: List<String>, onSocketCreated: (Socket) -> Unit): RawWebSocket? {
         for (domain in domains) {
             try {
                 return RawWebSocket.connect(

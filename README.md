@@ -28,6 +28,8 @@
 
 - **Adaptive routing.** Automatic route selection, with manual WebSocket, Cloudflare,
   and TCP controls when you need them.
+- **Additional transports.** HTTP/2 for Cloudflare media connections, custom
+  Cloudflare Workers, and optional Fake TLS for the local MTProto listener.
 - **Quiet defaults.** Extra route checks, prepared connections, and CPU wake lock
   are off by default. Background controls remain available.
 - **Clear status.** Local service and Telegram connectivity are shown separately,
@@ -74,6 +76,11 @@ The default listener is **`127.0.0.1:1443`**, accessible only on this device.
 Settings save automatically; changed runtime settings take effect when you leave
 Settings, restarting an active proxy if needed.
 
+Advanced connection settings include multiple Cloudflare domains, Worker domains,
+and an optional Fake TLS domain. After changing Fake TLS, open the updated proxy
+link in Telegram. PROXY protocol and forced test-DC routing are intended for
+specialized setups; leave them off for normal on-device use.
+
 **Your last choice is remembered.** An enabled proxy attempts to resume after
 device boot. Stopping it from the app, notification, or Quick Settings keeps it
 off. Android force-stop and battery restrictions can prevent background startup.
@@ -96,8 +103,10 @@ This is a Telegram proxy, **not a device-wide VPN or an anonymity guarantee**.
 It runs locally but connects to remote endpoints. Telegram message encryption is
 separate from the proxy transport.
 
-WebSocket TLS certificate verification is intentionally disabled; do not treat
-it as an authenticated TLS channel. Direct TCP fallback adds no TLS layer.
+Transport TLS certificate verification is intentionally disabled; do not treat
+it as an authenticated TLS channel. Direct TCP fallback and optional port-80
+Cloudflare connections add no TLS layer. Fake TLS disguises the local proxy
+handshake; it is not an additional encryption layer.
 Keep the default local address unless you intend to share access: `0.0.0.0`
 listens on all IPv4 interfaces. Keep your proxy link and secret private.
 
@@ -125,9 +134,10 @@ keystore. Never commit signing files.
 
 ## Credits
 
-Maintained by [crim50n](https://github.com/crim50n). Inspired by
-[Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy), developed
-independently. Not an official Telegram product.
+Maintained by [crim50n](https://github.com/crim50n). Includes protocol adaptations
+from [Flowseal/tg-ws-proxy](https://github.com/Flowseal/tg-ws-proxy)
+([MIT](app/src/main/assets/licenses/flowseal.txt)), developed independently.
+Not an official Telegram product.
 
 Icons by [Tabler](https://github.com/tabler/tabler-icons), Paweł Kuna and
 contributors ([MIT](app/src/main/assets/licenses/tabler-icons.txt)).

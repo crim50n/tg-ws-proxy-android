@@ -38,6 +38,11 @@ object MtProtoConstants {
         5 to "149.154.171.5",
         203 to "91.105.192.100",
     )
+    val DC_TEST_IPS = mapOf(
+        1 to "149.154.175.10",
+        2 to "149.154.167.40",
+        3 to "149.154.175.117",
+    )
 
     // Default DC redirects for WebSocket routing
     val DEFAULT_DC_REDIRECTS = mapOf(

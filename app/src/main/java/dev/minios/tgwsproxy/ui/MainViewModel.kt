@@ -287,7 +287,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun copySecret(secret: String) {
         val ctx = getApplication<Application>()
         val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("Secret", "dd$secret"))
+        clipboard.setPrimaryClip(ClipData.newPlainText("Secret", config.value.copy(secret = secret).linkSecret()))
         Toast.makeText(ctx, R.string.secret_copied, Toast.LENGTH_SHORT).show()
     }
 
@@ -341,6 +341,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             targetIp = domain,
                             cfProxyDomain = domain,
                             connectTimeoutMs = 8000,
+                            secure = cfg.cfSecure,
                         )
                         val elapsed = System.currentTimeMillis() - start
                         ws.close()

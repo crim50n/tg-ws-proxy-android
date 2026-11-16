@@ -5,6 +5,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.io.ByteArrayOutputStream
 import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.UnknownHostException
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -19,7 +20,7 @@ import kotlinx.coroutines.CancellationException
  * Connects to Telegram's WebSocket endpoints over TLS.
  */
 class RawWebSocket private constructor(
-    private val socket: SSLSocket,
+    private val socket: Socket,
     private val input: InputStream,
     private val output: OutputStream,
 ) : AutoCloseable {
@@ -65,12 +66,13 @@ class RawWebSocket private constructor(
             port: Int = 443,
             connectTimeoutMs: Int = 10000,
             bufferSize: Int = 256 * 1024,
-            onSocketCreated: ((SSLSocket) -> Unit)? = null,
+            onSocketCreated: ((Socket) -> Unit)? = null,
+            secure: Boolean = true,
         ): RawWebSocket {
             // Reuse global TLS context (matching Python's module-level ssl.SSLContext)
             val factory = globalSslContext.socketFactory
 
-            val socket = factory.createSocket() as SSLSocket
+            val socket = if (secure) factory.createSocket() as SSLSocket else Socket()
             val clampedTimeout = connectTimeoutMs.coerceIn(1, 10000)
             try {
                 onSocketCreated?.invoke(socket)
@@ -81,12 +83,14 @@ class RawWebSocket private constructor(
                 socket.soTimeout = clampedTimeout
 
                 // Set SNI hostname for TLS while connecting to the configured IP.
-                val sslParams = socket.sslParameters
-                sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
-                socket.sslParameters = sslParams
+                if (socket is SSLSocket) {
+                    val sslParams = socket.sslParameters
+                    sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
+                    socket.sslParameters = sslParams
+                }
 
                 socket.connect(InetSocketAddress(connectHost, port), clampedTimeout)
-                socket.startHandshake()
+                if (socket is SSLSocket) socket.startHandshake()
                 return finishUpgrade(socket, domain, path)
             } catch (e: Exception) {
                 try { socket.close() } catch (_: Exception) {}
@@ -94,13 +98,13 @@ class RawWebSocket private constructor(
             }
         }
 
-        private fun finishUpgrade(socket: SSLSocket, domain: String, path: String): RawWebSocket {
+        private fun finishUpgrade(socket: Socket, domain: String, path: String): RawWebSocket {
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
 
             // Send WebSocket upgrade request with domain as Host
             val key = ByteArray(16).also { SecureRandom().nextBytes(it) }
-            val wsKey = android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP)
+            val wsKey = java.util.Base64.getEncoder().encodeToString(key)
 
             val request = buildString {
                 append("GET $path HTTP/1.1\r\n")
@@ -141,10 +145,9 @@ class RawWebSocket private constructor(
                     }
                 }
                 .groupBy({ it.first }, { it.second })
-            val expectedAccept = android.util.Base64.encodeToString(
+            val expectedAccept = java.util.Base64.getEncoder().encodeToString(
                 MessageDigest.getInstance("SHA-1")
                     .digest((wsKey + WS_ACCEPT_GUID).toByteArray(Charsets.US_ASCII)),
-                android.util.Base64.NO_WRAP,
             )
             val connectionTokens = headers["connection"]
                 .orEmpty()
@@ -178,9 +181,11 @@ class RawWebSocket private constructor(
             bufferSize: Int = 256 * 1024,
             cfProxyDomain: String? = null,
             connectTimeoutMs: Int = 10000,
-            onSocketCreated: ((SSLSocket) -> Unit)? = null,
+            onSocketCreated: ((Socket) -> Unit)? = null,
             resolveCfAddress: (String) -> String? = { defaultCfDnsResolver.resolve(it) },
             cachedCfAddress: (String) -> String? = defaultCfDnsResolver::cached,
+            secure: Boolean = true,
+            isTestDc: Boolean = false,
         ): RawWebSocket {
             val domains = if (cfProxyDomain != null) {
                 val wsDc = if (dc == 203) 2 else dc
@@ -203,9 +208,12 @@ class RawWebSocket private constructor(
                             connectTarget
                         },
                         domain = domain,
+                        path = if (isTestDc && cfProxyDomain == null) "/apiws_test" else "/apiws",
                         bufferSize = bufferSize,
                         connectTimeoutMs = connectTimeoutMs,
                         onSocketCreated = onSocketCreated,
+                        secure = cfProxyDomain == null || secure,
+                        port = if (cfProxyDomain != null && !secure) 80 else 443,
                     )
                 } catch (e: WsHandshakeError) {
                     lastError = e
@@ -230,6 +238,8 @@ class RawWebSocket private constructor(
                                     bufferSize = bufferSize,
                                     connectTimeoutMs = connectTimeoutMs,
                                     onSocketCreated = onSocketCreated,
+                                    secure = secure,
+                                    port = if (secure) 443 else 80,
                                 )
                             } catch (fallbackError: Exception) {
                                 if (fallbackError is CancellationException) throw fallbackError
@@ -251,7 +261,9 @@ class RawWebSocket private constructor(
             var prev = 0
             while (true) {
                 val b = input.read()
-                if (b == -1) break
+                if (b == -1) {
+                    break
+                }
                 sb.append(b.toChar())
                 if (sb.length > MAX_HTTP_RESPONSE_BYTES) {
                     throw WebSocketException("WebSocket upgrade response too large")
@@ -350,15 +362,13 @@ class RawWebSocket private constructor(
     }
 
     override fun close() {
-        if (closed) return
-        closed = true
         try {
-            sendFrame(OPCODE_CLOSE, ByteArray(0))
-        } catch (_: Exception) {
-        }
-        try {
-            socket.close()
-        } catch (_: Exception) {
+            if (!closed) {
+                closed = true
+                try { sendFrame(OPCODE_CLOSE, ByteArray(0)) } catch (_: Exception) {}
+            }
+        } finally {
+            try { socket.close() } catch (_: Exception) {}
         }
     }
 

@@ -78,7 +78,8 @@
     <string name="settings_dc_hint">Формат: DC:IP (по одному на строку)\nНапример: 2:149.154.167.220</string>
     <string name="settings_dc_description">Расширенная настройка. Каждая строка задаёт прямой WebSocket-маршрут для датацентра Telegram. Удалите строку, чтобы использовать доступный резервный маршрут.</string>
     <string name="settings_auto_optimize">Настраивать подключение автоматически</string>
-    <string name="settings_auto_optimize_desc">Выбирает маршруты и безопасные параметры соединения. Отключите, чтобы настроить параметры ниже вручную.</string>
+    <string name="settings_auto_optimize_desc">Выбирает маршруты, домены Cloudflare и параметры подключения. Выключите для ручной настройки. Параметры Workers и протоколов действуют в обоих режимах.</string>
+    <string name="settings_cf_transport">Транспорт Cloudflare</string>
     <string name="settings_cf_enable">Использовать резервный маршрут Cloudflare</string>
     <string name="settings_cf_enable_desc">Добавляет альтернативный маршрут, если прямые подключения заблокированы или работают нестабильно.</string>
     <string name="settings_route_priority">Порядок маршрутов</string>
@@ -89,9 +90,9 @@
     <string name="settings_route_cf_desc">Cloudflare → WebSocket → TCP. Попробуйте, если в Telegram не загружаются медиа.</string>
     <string name="settings_cf_priority">После сбоя WebSocket пробовать Cloudflare раньше TCP</string>
     <string name="settings_cf_priority_desc">Если выключено, перед Cloudflare проверяется TCP.</string>
-    <string name="settings_cf_custom_domain">Использовать только свой домен Cloudflare</string>
-    <string name="settings_cf_custom_domain_desc">Заменяет общий список доменов указанным доменом. Используйте, только если общие домены постоянно недоступны.</string>
-    <string name="settings_cf_domain_label">Домен</string>
+    <string name="settings_cf_custom_domain">Свои домены Cloudflare</string>
+    <string name="settings_cf_custom_domain_desc">Заменяет общий список. Введите до 32 базовых доменов, по одному в строке, без префикса kws, схемы, порта и пути.</string>
+    <string name="settings_cf_domain_label">Домены</string>
     <string name="settings_cf_test">Проверить и выбрать домен</string>
     <string name="settings_cf_test_desc">Проверяет доступные домены через датацентры Telegram и выбирает самый быстрый рабочий домен для текущего запуска прокси.</string>
     <string name="settings_cf_testing">Тестирование…</string>
@@ -251,4 +252,17 @@
     <string name="about_limits_text">Не VPN и не гарантия анонимности. WS-клиент не проверяет сертификаты серверов; прямой TCP не добавляет TLS. Шифрование сообщений Telegram действует отдельно.</string>
     <string name="about_updates_note">Обновления поступают с GitHub. При загрузке в приложении проверяются SHA-256, пакет, версия и сертификат подписи; установка требует разрешения Android и вашего подтверждения.</string>
     <string name="about_tabler_icons">Tabler Icons · MIT</string>
+    <string name="settings_cf_secure">TLS для Cloudflare (порт 443)</string>
+    <string name="settings_cf_secure_desc">При отключении Cloudflare и Workers используют порт 80 без TLS. HTTP/2 становится недоступен.</string>
+    <string name="settings_h2_media">HTTP/2 для медиа</string>
+    <string name="settings_h2_media_desc">Общее HTTP/2-соединение для медиа перед переходом к WebSocket. Нужны включённый Cloudflare, TLS и нетестовые DC.</string>
+    <string name="settings_worker_domains">Домены Cloudflare Workers</string>
+    <string name="settings_worker_domains_desc">По одному домену совместимого Worker в строке (до 32). Используются перед CF/TCP, даже если Cloudflare выключен. Пустое поле отключает Workers.</string>
+    <string name="settings_fake_tls_domain">Домен Fake TLS</string>
+    <string name="settings_fake_tls_domain_desc">Пустое поле отключает маскировку. После изменения домена добавьте обновлённую ссылку прокси в Telegram.</string>
+    <string name="settings_force_test_dc">Тестовые DC Telegram</string>
+    <string name="settings_force_test_dc_desc">Только для тестовых аккаунтов. Отключает обычный Cloudflare и HTTP/2; заданные Workers остаются доступны.</string>
+    <string name="settings_proxy_protocol">Требовать PROXY protocol v1</string>
+    <string name="settings_proxy_protocol_desc">Только за доверенным L4-прокси, передающим заголовок PROXY v1. При включении прямые подключения Telegram не работают.</string>
+    <string name="validation_domain_list">Введите до 32 доменов, разделённых строками или запятыми, без схемы, порта и пути.</string>
 </resources>

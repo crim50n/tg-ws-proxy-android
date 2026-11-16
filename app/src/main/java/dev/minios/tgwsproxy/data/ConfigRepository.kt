@@ -83,6 +83,13 @@ class ConfigRepository(private val context: Context) {
         val WS_PING_INTERVAL_SECONDS = intPreferencesKey("ws_ping_interval_seconds")
         val SHOW_TRAFFIC_IN_NOTIFICATION = booleanPreferencesKey("show_traffic_in_notification")
         val CF_PROXY_USER_DOMAIN = stringPreferencesKey("cf_proxy_user_domain")
+        val CF_PROXY_DOMAINS = stringPreferencesKey("cf_proxy_domains")
+        val CF_WORKER_DOMAINS = stringPreferencesKey("cf_worker_domains")
+        val CF_SECURE = booleanPreferencesKey("cf_secure")
+        val CF_H2_MEDIA = booleanPreferencesKey("cf_h2_media")
+        val FAKE_TLS_DOMAIN = stringPreferencesKey("fake_tls_domain")
+        val FORCE_TEST_DC = booleanPreferencesKey("force_test_dc")
+        val PROXY_PROTOCOL = booleanPreferencesKey("proxy_protocol")
         val SHOW_DETAILED_STATS = booleanPreferencesKey("show_detailed_stats")
         val APP_THEME = stringPreferencesKey("app_theme")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
@@ -175,6 +182,14 @@ class ConfigRepository(private val context: Context) {
                 ?.takeIf { dev.minios.tgwsproxy.proxy.CfProxyDomains.isValidDomain(it) }
                 ?: "",
             showDetailedStats = prefs[Keys.SHOW_DETAILED_STATS] ?: false,
+            cfProxyDomains = ProxyConfig.parseDomains(prefs[Keys.CF_PROXY_DOMAINS].orEmpty()).orEmpty(),
+            cfWorkerDomains = ProxyConfig.parseDomains(prefs[Keys.CF_WORKER_DOMAINS].orEmpty()).orEmpty(),
+            cfSecure = prefs[Keys.CF_SECURE] ?: true,
+            cfH2Media = prefs[Keys.CF_H2_MEDIA] ?: true,
+            fakeTlsDomain = prefs[Keys.FAKE_TLS_DOMAIN]?.trim()?.lowercase()
+                ?.takeIf(dev.minios.tgwsproxy.proxy.CfProxyDomains::isValidDomain).orEmpty(),
+            forceTestDc = prefs[Keys.FORCE_TEST_DC] ?: false,
+            proxyProtocol = prefs[Keys.PROXY_PROTOCOL] ?: false,
             appTheme = prefs[Keys.APP_THEME]?.takeIf { it in setOf("system", "light", "dark") } ?: "system",
             dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: false,
         )
@@ -216,6 +231,13 @@ class ConfigRepository(private val context: Context) {
             prefs[Keys.WS_PING_INTERVAL_SECONDS] = config.webSocketPingIntervalSeconds.coerceIn(30, 300)
             prefs[Keys.SHOW_TRAFFIC_IN_NOTIFICATION] = config.showTrafficInNotification
             prefs[Keys.CF_PROXY_USER_DOMAIN] = config.cfProxyUserDomain
+            prefs[Keys.CF_PROXY_DOMAINS] = config.cfProxyDomains.joinToString("\n")
+            prefs[Keys.CF_WORKER_DOMAINS] = config.cfWorkerDomains.joinToString("\n")
+            prefs[Keys.CF_SECURE] = config.cfSecure
+            prefs[Keys.CF_H2_MEDIA] = config.cfH2Media
+            prefs[Keys.FAKE_TLS_DOMAIN] = config.fakeTlsDomain
+            prefs[Keys.FORCE_TEST_DC] = config.forceTestDc
+            prefs[Keys.PROXY_PROTOCOL] = config.proxyProtocol
             prefs[Keys.SHOW_DETAILED_STATS] = config.showDetailedStats
             prefs[Keys.APP_THEME] = config.appTheme
             prefs[Keys.DYNAMIC_COLOR] = config.dynamicColor

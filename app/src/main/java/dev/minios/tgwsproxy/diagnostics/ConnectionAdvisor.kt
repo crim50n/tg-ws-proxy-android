@@ -112,6 +112,7 @@ fun ProxyConfig.withAutomaticRouteDefaults(): ProxyConfig = copy(
     cfProxyPriority = true,
     cfProxyFirst = false,
     cfProxyUserDomain = "",
+    cfProxyDomains = emptyList(),
 ).withAutomaticPerformanceDefaults()
 
 fun ProxyConfig.withAutomaticPerformanceDefaults(): ProxyConfig = copy(

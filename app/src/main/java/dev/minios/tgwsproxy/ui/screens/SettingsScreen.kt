@@ -60,8 +60,14 @@ fun SettingsScreen(
         mutableIntStateOf(config.webSocketPingIntervalSeconds)
     }
     var showTrafficInNotification by remember { mutableStateOf(config.showTrafficInNotification) }
-    var cfDomain by remember { mutableStateOf(config.cfProxyUserDomain) }
-    var useCfDomain by remember { mutableStateOf(config.cfProxyUserDomain.isNotBlank()) }
+    var cfDomain by remember { mutableStateOf(config.customCfDomains().joinToString("\n")) }
+    var useCfDomain by remember { mutableStateOf(config.customCfDomains().isNotEmpty()) }
+    var workerDomains by remember { mutableStateOf(config.cfWorkerDomains.joinToString("\n")) }
+    var cfSecure by remember { mutableStateOf(config.cfSecure) }
+    var cfH2Media by remember { mutableStateOf(config.cfH2Media) }
+    var fakeTlsDomain by remember { mutableStateOf(config.fakeTlsDomain) }
+    var forceTestDc by remember { mutableStateOf(config.forceTestDc) }
+    var proxyProtocol by remember { mutableStateOf(config.proxyProtocol) }
     var bufKb by remember { mutableStateOf((config.bufferSize / 1024).toString()) }
     var poolSize by remember { mutableStateOf(config.poolSize.toString()) }
     var showDetailedStats by remember { mutableStateOf(config.showDetailedStats) }
@@ -77,6 +83,8 @@ fun SettingsScreen(
     var cfDomainError by remember { mutableStateOf<String?>(null) }
     var bufferError by remember { mutableStateOf<String?>(null) }
     var poolError by remember { mutableStateOf<String?>(null) }
+    var workerError by remember { mutableStateOf<String?>(null) }
+    var fakeTlsError by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
 
@@ -87,6 +95,9 @@ fun SettingsScreen(
         val secretVal = secret.trim()
         val parsedRedirects = ProxyConfig.parseDcRedirectsStrict(dcRedirects)
         val normalizedCfDomain = cfDomain.trim().lowercase()
+        val parsedDomains = ProxyConfig.parseDomains(normalizedCfDomain)
+        val parsedWorkers = ProxyConfig.parseDomains(workerDomains)
+        val tlsDomain = fakeTlsDomain.trim().lowercase()
         val bufferKb = bufKb.toIntOrNull()
         val parsedPoolSize = poolSize.toIntOrNull()
 
@@ -111,11 +122,14 @@ fun SettingsScreen(
             !autoOptimizeConnection &&
                 cfEnabled &&
                 useCfDomain &&
-                !CfProxyDomains.isValidDomain(normalizedCfDomain),
+                 parsedDomains.isNullOrEmpty(),
             R.string.validation_domain_format,
         ) {
             cfDomainError = it
         }
+        error(parsedWorkers == null, R.string.validation_domain_list) { workerError = it }
+        error(tlsDomain.isNotEmpty() && !CfProxyDomains.isValidDomain(tlsDomain),
+            R.string.validation_domain_format) { fakeTlsError = it }
         error(
             !autoOptimizeConnection && (bufferKb == null || bufferKb !in 4..4096),
             R.string.validation_buffer_range,
@@ -147,7 +161,13 @@ fun SettingsScreen(
             cfDomainRefreshEnabled = cfDomainRefreshEnabled,
             webSocketPingIntervalSeconds = webSocketPingIntervalSeconds,
             showTrafficInNotification = showTrafficInNotification,
-            cfProxyUserDomain = if (useCfDomain) normalizedCfDomain else "",
+            cfProxyDomains = if (useCfDomain) parsedDomains ?: config.customCfDomains() else emptyList(),
+            cfWorkerDomains = parsedWorkers!!,
+            cfSecure = cfSecure,
+            cfH2Media = cfH2Media,
+            fakeTlsDomain = tlsDomain,
+            forceTestDc = forceTestDc,
+            proxyProtocol = proxyProtocol,
             showDetailedStats = showDetailedStats,
             appTheme = appTheme,
             dynamicColor = dynamicColor,
@@ -171,6 +191,12 @@ fun SettingsScreen(
         showTrafficInNotification,
         cfDomain,
         useCfDomain,
+        workerDomains,
+        cfSecure,
+        cfH2Media,
+        fakeTlsDomain,
+        forceTestDc,
+        proxyProtocol,
         bufKb,
         poolSize,
         showDetailedStats,
@@ -317,6 +343,29 @@ fun SettingsScreen(
                             }
                         },
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = fakeTlsDomain,
+                        onValueChange = {
+                            fakeTlsDomain = it
+                            fakeTlsError = null
+                        },
+                        label = { Text(stringResource(R.string.settings_fake_tls_domain)) },
+                        supportingText = {
+                            Text(fakeTlsError ?: stringResource(R.string.settings_fake_tls_domain_desc))
+                        },
+                        isError = fakeTlsError != null,
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_proxy_protocol),
+                        description = stringResource(R.string.settings_proxy_protocol_desc),
+                        checked = proxyProtocol,
+                        onCheckedChange = { proxyProtocol = it },
+                    )
                 }
                 SettingsSection(title = stringResource(R.string.settings_connection_options)) {
                     SettingsSwitchRow(
@@ -340,8 +389,11 @@ fun SettingsScreen(
                             checked = cfEnabled,
                             onCheckedChange = { cfEnabled = it },
                         )
+                    }
 
-                        if (cfEnabled) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    SettingsSubsectionTitle(text = stringResource(R.string.settings_cf_transport))
+                    if (!autoOptimizeConnection && cfEnabled) {
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(
                                 text = stringResource(R.string.settings_route_priority),
@@ -400,15 +452,50 @@ fun SettingsScreen(
                                         Text(stringResource(R.string.settings_cf_domain_label))
                                     },
                                     modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
+                                    minLines = 2,
+                                    maxLines = 5,
                                     shape = RoundedCornerShape(14.dp),
                                     isError = cfDomainError != null,
                                     supportingText = cfDomainError?.let { { Text(it) } },
                                 )
                             }
+                    }
 
-                            Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_cf_secure),
+                        description = stringResource(R.string.settings_cf_secure_desc),
+                        checked = cfSecure,
+                        onCheckedChange = { cfSecure = it },
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_h2_media),
+                        description = stringResource(R.string.settings_h2_media_desc),
+                        checked = cfH2Media,
+                        onCheckedChange = { cfH2Media = it },
+                        enabled = (autoOptimizeConnection || cfEnabled) && cfSecure && !forceTestDc,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = workerDomains,
+                        onValueChange = {
+                            workerDomains = it
+                            workerError = null
+                        },
+                        label = { Text(stringResource(R.string.settings_worker_domains)) },
+                        supportingText = {
+                            Text(workerError ?: stringResource(R.string.settings_worker_domains_desc))
+                        },
+                        isError = workerError != null,
+                        minLines = 2,
+                        maxLines = 5,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
 
+                    if (!autoOptimizeConnection && cfEnabled) {
                             Text(
                                 text = stringResource(R.string.settings_cf_test_desc),
                                 style = MaterialTheme.typography.bodySmall,
@@ -452,10 +539,11 @@ fun SettingsScreen(
                             }
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
 
-                        // Direct WebSocket targets
-                        SettingsSubsectionTitle(text = stringResource(R.string.settings_dc_section))
+                    // Direct WebSocket targets
+                    SettingsSubsectionTitle(text = stringResource(R.string.settings_dc_section))
+                    if (!autoOptimizeConnection) {
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
                             text = stringResource(R.string.settings_dc_description),
@@ -481,7 +569,17 @@ fun SettingsScreen(
                         )
 
                         Spacer(modifier = Modifier.height(16.dp))
+                    }
 
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_force_test_dc),
+                        description = stringResource(R.string.settings_force_test_dc_desc),
+                        checked = forceTestDc,
+                        onCheckedChange = { forceTestDc = it },
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    if (!autoOptimizeConnection) {
                         SettingsSubsectionTitle(
                             text = stringResource(R.string.settings_perf_section)
                         )
@@ -722,12 +820,18 @@ private fun SettingsSwitchRow(
     description: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean = true,
 ) {
     Column(
         modifier =
             Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(14.dp))
-                .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+                .toggleable(
+                    value = checked,
+                    enabled = enabled,
+                    role = Role.Switch,
+                    onValueChange = onCheckedChange,
+                )
                 .heightIn(min = 48.dp)
                 .padding(vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -741,14 +845,15 @@ private fun SettingsSwitchRow(
                 text = title,
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.38f),
             )
-            Switch(checked = checked, onCheckedChange = null, colors = tgSwitchColors())
+            Switch(checked = checked, onCheckedChange = null, enabled = enabled, colors = tgSwitchColors())
         }
         Text(
             text = description,
             modifier = Modifier.fillMaxWidth(),
             style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.38f),
         )
     }
 }

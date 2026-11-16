@@ -8,6 +8,7 @@ enum class RuntimeRouteMode {
 }
 
 fun ProxyConfig.runtimeRouteMode(): RuntimeRouteMode = when {
+    forceTestDc -> RuntimeRouteMode.WS_TCP
     cfProxyEnabled && cfProxyFirst -> RuntimeRouteMode.CF_WS_TCP
     cfProxyEnabled && cfProxyPriority -> RuntimeRouteMode.WS_CF_TCP
     cfProxyEnabled -> RuntimeRouteMode.WS_TCP_CF

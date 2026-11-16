@@ -29,6 +29,13 @@ data class ProxyConfig(
     val webSocketPingIntervalSeconds: Int = 180,
     val showTrafficInNotification: Boolean = true,
     val cfProxyUserDomain: String = "",
+    val cfProxyDomains: List<String> = emptyList(),
+    val cfWorkerDomains: List<String> = emptyList(),
+    val cfSecure: Boolean = true,
+    val cfH2Media: Boolean = true,
+    val fakeTlsDomain: String = "",
+    val forceTestDc: Boolean = false,
+    val proxyProtocol: Boolean = false,
     val showDetailedStats: Boolean = false,
     val appTheme: String = "system",
     val dynamicColor: Boolean = false,
@@ -47,9 +54,17 @@ data class ProxyConfig(
      * Get all available CF proxy domains for fallback rotation.
      */
     fun getAllCfDomains(): List<String> {
-        if (!cfProxyEnabled) return emptyList()
-        if (cfProxyUserDomain.isNotBlank()) return listOf(cfProxyUserDomain)
+        if (!cfProxyEnabled || forceTestDc) return emptyList()
+        customCfDomains().takeIf { it.isNotEmpty() }?.let { return it }
         return CfProxyDomains.getDomains()
+    }
+
+    fun customCfDomains(): List<String> = cfProxyDomains.ifEmpty {
+        cfProxyUserDomain.takeIf(String::isNotBlank)?.let(::listOf).orEmpty()
+    }
+
+    fun linkSecret(): String = if (fakeTlsDomain.isBlank()) "dd$secret" else {
+        "ee$secret" + fakeTlsDomain.toByteArray(Charsets.US_ASCII).joinToString("") { "%02x".format(it) }
     }
 
     /**
@@ -58,7 +73,8 @@ data class ProxyConfig(
      */
     fun proxyLink(): String {
         val linkHost = getLinkHost(host)
-        return "tg://proxy?server=$linkHost&port=$port&secret=dd$secret"
+        val formattedHost = if (':' in linkHost) "[$linkHost]" else linkHost
+        return "tg://proxy?server=$formattedHost&port=$port&secret=${linkSecret()}"
     }
 
     /**
@@ -71,6 +87,12 @@ data class ProxyConfig(
     }
 
     companion object {
+        fun parseDomains(text: String): List<String>? {
+            val domains = text.split(Regex("[\\s,;]+")).filter(String::isNotBlank)
+                .map { it.lowercase(java.util.Locale.ROOT) }.distinct()
+            return domains.takeIf { it.size <= 32 && it.all(CfProxyDomains::isValidDomain) }
+        }
+
         fun generateSecret(): String {
             val bytes = ByteArray(16)
             SecureRandom().nextBytes(bytes)

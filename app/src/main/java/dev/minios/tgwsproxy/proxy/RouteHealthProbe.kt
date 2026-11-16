@@ -81,6 +81,8 @@ object RouteHealthProbe {
                         dnsResolver.resolve(domain, connectivity, epoch)
                     },
                     cachedCfAddress = dnsResolver::cached,
+                    secure = config.cfSecure,
+                    isTestDc = config.forceTestDc,
                 )
                 checkCurrent()
             } finally { ws?.abort() }
@@ -90,8 +92,8 @@ object RouteHealthProbe {
             when (route) {
                 TransportRoute.WEBSOCKET -> connectWs()
                 TransportRoute.CLOUDFLARE -> {
-                    val domains = if (config.cfProxyUserDomain.isNotBlank()) listOf(config.cfProxyUserDomain)
-                        else CfProxyDomains.getDomainsForDc(dc).take(2)
+                    if (config.forceTestDc) return
+                    val domains = config.customCfDomains().ifEmpty { CfProxyDomains.getDomainsForDc(dc).take(2) }
                     var error: Exception? = null
                     var connected = false
                     for (domain in domains) {
@@ -106,7 +108,7 @@ object RouteHealthProbe {
                     if (!connected) throw error ?: ProxyException("No CF domains available")
                 }
                 TransportRoute.TCP -> {
-                    val ip = MtProtoConstants.DC_IPS[dc] ?: return
+                    val ip = (if (config.forceTestDc) MtProtoConstants.DC_TEST_IPS else MtProtoConstants.DC_IPS)[dc] ?: return
                     Socket().use { socket ->
                         track(socket)
                         socket.connect(InetSocketAddress(ip, 443), CONNECT_TIMEOUT_MS)

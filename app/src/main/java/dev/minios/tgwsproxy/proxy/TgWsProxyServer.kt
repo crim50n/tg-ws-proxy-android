@@ -336,7 +336,7 @@ class TgWsProxyServer(
             } else {
                 "TCP before CF fallback"
             }
-            val domainType = if (config.cfProxyUserDomain.isNotBlank()) "user" else "auto"
+            val domainType = if (config.customCfDomains().isNotEmpty()) "user" else "auto"
             Log.i(TAG, "  CF proxy:      enabled ($route | $domainType)")
         }
         Log.i(TAG, sep)
@@ -345,6 +345,7 @@ class TgWsProxyServer(
     private fun directWarmupRedirects(): Map<Int, String> {
         val current = config
         return if (!connectivity.state.value.allowsBackgroundWork ||
+            current.forceTestDc ||
             (current.cfProxyEnabled && current.cfProxyFirst)
         ) emptyMap() else current.dcRedirects
     }
@@ -359,11 +360,31 @@ class TgWsProxyServer(
         }
 
         try {
-            val input = clientSocket.getInputStream()
-            val output = clientSocket.getOutputStream()
+            var input = clientSocket.getInputStream()
+            var output = clientSocket.getOutputStream()
 
             // Set handshake read timeout (10s, matching Python asyncio.wait_for(..., timeout=10))
             clientSocket.soTimeout = 10_000
+            if (config.proxyProtocol) ProxyProtocol.read(input)
+            if (config.fakeTlsDomain.isNotBlank()) {
+                val buffered = java.io.PushbackInputStream(input, 1)
+                val first = buffered.read()
+                if (first < 0) return
+                if (first == 0x16) {
+                    try {
+                        val tls = FakeTls.accept(buffered, output, config.secretBytes(), config.fakeTlsDomain,
+                            byteArrayOf(first.toByte()))
+                        input = tls.input
+                        output = tls.output
+                    } catch (mask: FakeTls.MaskingRequired) {
+                        maskTls(clientSocket, buffered, output, mask, epoch)
+                        return
+                    }
+                } else {
+                    buffered.unread(first)
+                    input = buffered
+                }
+            }
 
             // Read 64-byte handshake
             val initData = ByteArray(MtProtoConstants.HANDSHAKE_LEN)
@@ -407,7 +428,9 @@ class TgWsProxyServer(
             }
 
             val dcIndex = handshake.dcIndex.toInt()
-            val absDc = if (dcIndex < 0) -dcIndex else dcIndex
+            val rawDc = if (dcIndex < 0) -dcIndex else dcIndex
+            val isTestDc = config.forceTestDc || rawDc >= 10000
+            val absDc = if (rawDc >= 10000) rawDc - 10000 else rawDc
             val isMedia = dcIndex < 0
             DiagnosticLogger.event("handshake_ok", "dc" to absDc, "media" to isMedia)
 
@@ -416,7 +439,7 @@ class TgWsProxyServer(
             }
 
             // Generate relay init
-            val relayInit = MtProtoCrypto.generateRelayInit(handshake.protoTag, handshake.dcIndex)
+            val relayInit = MtProtoCrypto.generateRelayInit(handshake.protoTag, (if (isMedia) -absDc else absDc).toShort())
 
             // Build crypto context
             val cryptoCtx = CryptoCtx(
@@ -429,7 +452,7 @@ class TgWsProxyServer(
             val upstream = bridge.connectUpstream(
                 dc = absDc,
                 isMedia = isMedia,
-                config = config,
+                config = if (isTestDc) config.copy(forceTestDc = true) else config,
                 pool = wsPool,
                 protoTag = handshake.protoTag,
                 relayInit = relayInit.initPacket,
@@ -494,6 +517,43 @@ class TgWsProxyServer(
             if (globalVerbose) {
                 Log.d(TAG, "Client disconnected: $clientAddr")
             }
+        }
+    }
+
+    /** Relay rejected/repeated ClientHello bytes unchanged to the camouflage site. */
+    private suspend fun maskTls(
+        client: Socket,
+        input: java.io.InputStream,
+        output: java.io.OutputStream,
+        mask: FakeTls.MaskingRequired,
+        epoch: Long,
+    ) = coroutineScope {
+        val remote = Socket()
+        if (!connectivity.trackSocket(epoch, remote)) return@coroutineScope
+        try {
+            remote.connect(InetSocketAddress(mask.domain, 443), 5_000)
+            remote.tcpNoDelay = true
+            remote.soTimeout = 30_000
+            client.soTimeout = 30_000
+            remote.getOutputStream().write(mask.initialData)
+            remote.getOutputStream().flush()
+            val up = launch(Dispatchers.IO) {
+                try { input.copyTo(remote.getOutputStream(), 16 * 1024) } catch (_: Exception) {}
+            }
+            val down = launch(Dispatchers.IO) {
+                try { remote.getInputStream().copyTo(output, 16 * 1024) } catch (_: Exception) {}
+            }
+            try {
+                kotlinx.coroutines.selects.select<Unit> { up.onJoin {}; down.onJoin {} }
+            } finally {
+                runCatching { remote.close() }
+                runCatching { client.close() }
+                up.cancel()
+                down.cancel()
+            }
+        } finally {
+            runCatching { remote.close() }
+            connectivity.releaseSocket(remote)
         }
     }
 

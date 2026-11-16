@@ -1,7 +1,7 @@
 {
-  "versionCode": 12,
-  "versionName": "2.0.0",
-  "releaseUrl": "https://github.com/crim50n/tg-ws-proxy-android/releases/tag/v2.0.0",
-  "apkUrl": "https://github.com/crim50n/tg-ws-proxy-android/releases/download/v2.0.0/tg-ws-proxy-2.0.0.apk",
-  "checksumUrl": "https://github.com/crim50n/tg-ws-proxy-android/releases/download/v2.0.0/tg-ws-proxy-2.0.0.apk.sha256"
+  "versionCode": 13,
+  "versionName": "2.1.0",
+  "releaseUrl": "https://github.com/crim50n/tg-ws-proxy-android/releases/tag/v2.1.0",
+  "apkUrl": "https://github.com/crim50n/tg-ws-proxy-android/releases/download/v2.1.0/tg-ws-proxy-2.1.0.apk",
+  "checksumUrl": "https://github.com/crim50n/tg-ws-proxy-android/releases/download/v2.1.0/tg-ws-proxy-2.1.0.apk.sha256"
 }

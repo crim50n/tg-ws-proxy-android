@@ -375,7 +375,7 @@ class ProxyService : Service() {
                     _runtimeRouteMode.value = config.runtimeRouteMode()
                     updateNotification(config.host, config.port, showTraffic = config.showTrafficInNotification)
                     if (config.keepCpuAwake) acquireWakeLock()
-                    if (config.cfProxyEnabled && config.cfDomainRefreshEnabled) {
+                    if (config.cfProxyEnabled && !config.forceTestDc && config.cfDomainRefreshEnabled) {
                         CfProxyDomains.startBackgroundRefresh()
                     }
                     ownedServer = srv
@@ -416,7 +416,7 @@ class ProxyService : Service() {
                         backgroundAllowed = snapshot.allowsBackgroundWork
                         val activeConfig = srv.configSnapshot
                         if (restartJob?.isActive == true) return@collect
-                        val advice = analyzeConnectivity(snapshot, activeConfig.cfProxyEnabled, activeConfig.cfProxyFirst)
+                        val advice = analyzeConnectivity(snapshot, activeConfig.cfProxyEnabled && !activeConfig.forceTestDc, activeConfig.cfProxyFirst)
                         if (advice == null) {
                             if (!activeConfig.autoOptimizeConnection) notificationManager.cancel(ADVICE_NOTIFICATION_ID)
                             return@collect

@@ -74,6 +74,7 @@ internal class CfCooldownTracker(
  */
 class Bridge(private val connectivity: ConnectivityTracker) {
     private val cfDnsResolver = CfDnsResolver()
+    private val h2Pool = CfH2Pool(connectivity)
 
     private val DC_FAIL_COOLDOWN_MS = 30_000L
     private val WS_FAIL_TIMEOUT_MS = 2_000
@@ -92,7 +93,8 @@ class Bridge(private val connectivity: ConnectivityTracker) {
     }
 
     private fun dial(epoch: Long, dc: Int, media: Boolean, target: String, buffer: Int,
-                     timeout: Int, cfDomain: String? = null): RawWebSocket {
+                     timeout: Int, cfDomain: String? = null, secure: Boolean = true,
+                     isTestDc: Boolean = false): RawWebSocket {
         checkEpoch(epoch)
         val sockets = mutableListOf<Socket>()
         try {
@@ -110,7 +112,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
                     var address: String? = null
                     connectivity.recordIfCurrent(epoch) { address = cfDnsResolver.cached(domain) }
                     address
-                })
+                 }, secure = secure, isTestDc = isTestDc)
             if (!connectivity.isCurrent(epoch)) {
                 ws.abort()
                 checkEpoch(epoch)
@@ -135,6 +137,9 @@ class Bridge(private val connectivity: ConnectivityTracker) {
     private val cfCooldowns = CfCooldownTracker()
     private val directWsCircuitBreaker = DirectWsCircuitBreaker()
     private val pendingSockets = ConcurrentHashMap.newKeySet<Socket>()
+    private val workerRetryAfter = ConcurrentHashMap<String, Long>()
+    private val activeWorkers = ConcurrentHashMap<Int, String>()
+    private val activeCustomCf = ConcurrentHashMap<Int, String>()
 
     /**
      * Reset blacklist and cooldown state (called on server restart).
@@ -148,6 +153,10 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         cfCooldowns.reset()
         cfDnsResolver.reset()
         directWsCircuitBreaker.reset()
+        h2Pool.reset()
+        workerRetryAfter.clear()
+        activeWorkers.clear()
+        activeCustomCf.clear()
     }
 
     /**
@@ -163,13 +172,17 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         val ws: RawWebSocket? = null,
         val tcpSocket: Socket? = null,
         val epoch: Long = 0,
+        val h2: CfH2Pool.Channel? = null,
+        val worker: Boolean = false,
     ) : AutoCloseable {
         fun abort() {
             ws?.abort()
+            h2?.close()
             try { tcpSocket?.close() } catch (_: Exception) {}
         }
         override fun close() {
             ws?.close()
+            h2?.close()
             try { tcpSocket?.close() } catch (_: Exception) {}
         }
     }
@@ -196,13 +209,13 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         checkEpoch(epoch)
         val attemptStartedAt = System.currentTimeMillis()
         val mediaTag = if (isMedia) " media" else ""
-        val dcKey = "$dc${if (isMedia) "m" else ""}"
+        val dcKey = "$dc${if (isMedia) "m" else ""}${if (config.forceTestDc) "t" else ""}"
         var adaptiveCfFirst = false
         connectivity.recordIfCurrent(epoch) {
-            adaptiveCfFirst = config.autoOptimizeConnection && config.cfProxyEnabled &&
+            adaptiveCfFirst = !config.forceTestDc && config.autoOptimizeConnection && config.cfProxyEnabled &&
                     directWsCircuitBreaker.isBlocked(dc, isMedia)
         }
-        val cfAttempted = config.cfProxyEnabled && (config.cfProxyFirst || adaptiveCfFirst)
+        val cfAttempted = !config.forceTestDc && config.cfProxyEnabled && (config.cfProxyFirst || adaptiveCfFirst)
 
         if (cfAttempted) {
             if (adaptiveCfFirst) {
@@ -214,7 +227,8 @@ class Bridge(private val connectivity: ConnectivityTracker) {
                 )
             }
             DiagnosticLogger.event("upstream_attempt", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
-            val conn = tryCfProxyFallback(dc, isMedia, config, epoch)
+            val conn = tryWorkerFallback(dc, isMedia, config, epoch)
+                ?: tryCfProxyFallback(dc, isMedia, config, epoch)
             if (conn != null) return@withContext conn
         }
 
@@ -250,7 +264,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         // 1. Try WS pool
         checkEpoch(epoch)
         var pooledWs: RawWebSocket? = null
-        connectivity.recordIfCurrent(epoch) { pooledWs = pool?.get(dc, isMedia) }
+        connectivity.recordIfCurrent(epoch) { if (!config.forceTestDc) pooledWs = pool?.get(dc, isMedia) }
         if (pooledWs != null) {
             val ready = pooledWs!!
             if (!connectivity.recordIfCurrent(epoch) {
@@ -287,7 +301,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         )
         try {
             record(epoch, dc, isMedia, TransportRoute.WEBSOCKET, RoutePhase.CONNECTING)
-            ws = dial(epoch, dc, isMedia, targetIp, config.bufferSize, wsTimeout)
+            ws = dial(epoch, dc, isMedia, targetIp, config.bufferSize, wsTimeout, isTestDc = config.forceTestDc)
             allRedirects = false
         } catch (e: WsHandshakeError) {
             connectivity.recordIfCurrent(epoch, requireInternet = true) { ProxyStats.wsErrors.incrementAndGet() }
@@ -388,11 +402,15 @@ class Bridge(private val connectivity: ConnectivityTracker) {
     ): UpstreamConnection? {
         val mediaTag = if (isMedia) " media" else ""
         val methods = mutableListOf<String>()
+        // Do not repeat Workers after an unsuccessful CF-first chain.
+        if ((allowCf || config.forceTestDc) && config.cfWorkerDomains.isNotEmpty()) {
+            methods.add("worker")
+        }
         methods.add("tcp")
 
-        if (config.cfProxyEnabled && allowCf) {
+        if (config.cfProxyEnabled && allowCf && !config.forceTestDc) {
             if (config.cfProxyPriority) {
-                methods.add(0, "cf")  // CF before TCP
+                methods.add(methods.indexOf("tcp"), "cf")
             } else {
                 methods.add("cf")     // CF after TCP
             }
@@ -401,6 +419,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         for (method in methods) {
             checkEpoch(epoch)
             when (method) {
+                "worker" -> tryWorkerFallback(dc, isMedia, config, epoch)?.let { return it }
                 "cf" -> {
                     DiagnosticLogger.event("upstream_attempt", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
                     val conn = tryCfProxyFallback(dc, isMedia, config, epoch)
@@ -409,13 +428,60 @@ class Bridge(private val connectivity: ConnectivityTracker) {
                 "tcp" -> {
                     // TCP fallback uses standard DC IPs (like Python DC_DEFAULT_IPS),
                     // NOT the WS redirect IPs
-                    val fallbackIp = MtProtoConstants.DC_IPS[dc]
+                    val fallbackIp = (if (config.forceTestDc) MtProtoConstants.DC_TEST_IPS else MtProtoConstants.DC_IPS)[dc]
                     if (fallbackIp != null) {
                         DiagnosticLogger.event("upstream_attempt", "dc" to dc, "media" to isMedia, "route" to "tcp")
                         Log.i(TAG, "DC$dc$mediaTag -> TCP fallback to $fallbackIp:443")
                         val conn = tryTcpDirect(dc, isMedia, fallbackIp, config.bufferSize, relayInit, tcpFallback, epoch)
                         if (conn != null) return conn
                     }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun tryWorkerFallback(dc: Int, isMedia: Boolean, config: ProxyConfig, epoch: Long): UpstreamConnection? {
+        val destination = (if (config.forceTestDc) MtProtoConstants.DC_TEST_IPS else MtProtoConstants.DC_IPS)[dc]
+            ?: return null
+        val domains = config.cfWorkerDomains.sortedBy { it != activeWorkers[dc] }
+        for (domain in domains) {
+            checkEpoch(epoch)
+            if ((workerRetryAfter[domain] ?: 0) > System.currentTimeMillis()) continue
+            val sockets = mutableListOf<Socket>()
+            try {
+                record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.CONNECTING)
+                val ws = RawWebSocket.connect(
+                    domain, domain,
+                    path = "/apiws?dst=${java.net.URLEncoder.encode(destination, "UTF-8")}&dc=$dc",
+                    port = if (config.cfSecure) 443 else 80,
+                    secure = config.cfSecure,
+                    bufferSize = config.bufferSize,
+                    onSocketCreated = { socket ->
+                        sockets.add(socket)
+                        pendingSockets.add(socket)
+                        if (!connectivity.trackSocket(epoch, socket)) checkEpoch(epoch)
+                    },
+                )
+                if (!connectivity.recordIfCurrent(epoch) {
+                    workerRetryAfter.remove(domain)
+                    activeWorkers[dc] = domain
+                    ProxyStats.connectionsCfProxy.incrementAndGet()
+                    record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.CONNECTED)
+                    DiagnosticLogger.event("upstream_route_ready", "dc" to dc, "media" to isMedia, "route" to "cf_worker")
+                }) { ws.abort(); checkEpoch(epoch) }
+                return UpstreamConnection(UpstreamType.CFPROXY, ws = ws, epoch = epoch, worker = true)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                connectivity.recordIfCurrent(epoch, requireInternet = true) {
+                    workerRetryAfter[domain] = System.currentTimeMillis() + 30_000
+                }
+                record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.FAILED)
+                DiagnosticLogger.failure("upstream_attempt_failed", e, "dc" to dc, "route" to "cf_worker")
+            } finally {
+                sockets.forEach {
+                    pendingSockets.remove(it)
+                    connectivity.releaseSocket(it)
                 }
             }
         }
@@ -433,13 +499,20 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         epoch: Long,
     ): UpstreamConnection? {
         checkEpoch(epoch)
+        if (config.forceTestDc || !config.cfProxyEnabled) return null
         val mediaTag = if (isMedia) " media" else ""
-        val allDomains = if (config.cfProxyUserDomain.isNotBlank()) {
-            listOf(config.cfProxyUserDomain)
-        } else {
-            CfProxyDomains.getDomainsForDc(dc)
-        }
+        val allDomains = config.customCfDomains().sortedBy { it != activeCustomCf[dc] }
+            .ifEmpty { CfProxyDomains.getDomainsForDc(dc) }
         if (allDomains.isEmpty()) return null
+        if (isMedia && config.cfH2Media && config.cfSecure) {
+            h2Pool.open(dc, allDomains, epoch)?.let { channel ->
+                if (!connectivity.recordIfCurrent(epoch) {
+                    ProxyStats.connectionsCfProxy.incrementAndGet()
+                    record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.CONNECTED)
+                }) { channel.close(); checkEpoch(epoch) }
+                return UpstreamConnection(UpstreamType.CFPROXY, epoch = epoch, h2 = channel)
+            }
+        }
 
         val availableDomains = allDomains.filterNot { cfCooldowns.isCoolingDown(it) }
         if (availableDomains.isEmpty()) {
@@ -451,7 +524,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         Log.i(TAG, "DC$dc$mediaTag -> trying CF proxy (${availableDomains.size} available)")
 
         // Keep the sticky domain fast, then cap the remaining connection pressure at two.
-        val first = tryCfDomain(dc, isMedia, config.bufferSize, availableDomains.first(), epoch)
+        val first = tryCfDomain(dc, isMedia, config.bufferSize, availableDomains.first(), epoch, config.cfSecure)
         if (first != null) return cfConnectionReady(dc, isMedia, first.first, first.second, epoch)
 
         for (batch in availableDomains.drop(1).chunked(CF_FALLBACK_PARALLELISM)) {
@@ -460,7 +533,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
                 val results = coroutineScope {
                     batch.map { baseDomain ->
                         async(Dispatchers.IO) {
-                            tryCfDomain(dc, isMedia, config.bufferSize, baseDomain, epoch)?.also {
+                            tryCfDomain(dc, isMedia, config.bufferSize, baseDomain, epoch, config.cfSecure)?.also {
                                 candidates.add(it.second)
                             }
                         }
@@ -483,6 +556,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         bufferSize: Int,
         baseDomain: String,
         epoch: Long,
+        secure: Boolean,
     ): Pair<String, RawWebSocket>? {
         checkEpoch(epoch)
         var skip = false
@@ -494,7 +568,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         val mediaTag = if (isMedia) " media" else ""
         return try {
             record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.CONNECTING)
-            val ws = dial(epoch, dc, isMedia, baseDomain, bufferSize, WS_NORMAL_TIMEOUT_MS, baseDomain)
+            val ws = dial(epoch, dc, isMedia, baseDomain, bufferSize, WS_NORMAL_TIMEOUT_MS, baseDomain, secure)
             if (!connectivity.recordIfCurrent(epoch) {
                 cfDnsResolver.markAvailable()
                 cfCooldowns.clear(baseDomain)
@@ -530,6 +604,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
     ): UpstreamConnection {
         if (!connectivity.recordIfCurrent(epoch) {
             CfProxyDomains.setActiveDomain(dc, baseDomain)
+            activeCustomCf[dc] = baseDomain
             ProxyStats.connectionsCfProxy.incrementAndGet()
             DiagnosticLogger.event("upstream_route_ready", "dc" to dc, "media" to isMedia, "route" to "cloudflare")
             record(epoch, dc, isMedia, TransportRoute.CLOUDFLARE, RoutePhase.CONNECTED)
@@ -599,6 +674,10 @@ class Bridge(private val connectivity: ConnectivityTracker) {
     ) = coroutineScope {
         val epoch = upstream.epoch
         checkEpoch(epoch)
+        if (upstream.h2 != null) {
+            upstream.h2.bridge(clientInput, clientOutput, cryptoCtx, protoTag, closeClient)
+            return@coroutineScope
+        }
         val route = when (upstream.type) {
             UpstreamType.WEBSOCKET -> TransportRoute.WEBSOCKET
             UpstreamType.CFPROXY -> TransportRoute.CLOUDFLARE
@@ -662,7 +741,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         }
 
         // Reuse decrypted client bytes for WS packet boundaries.
-        val splitter: MsgSplitter? = if (upstream.type != UpstreamType.TCP) {
+        val splitter: MsgSplitter? = if (upstream.type != UpstreamType.TCP && !upstream.worker) {
             MsgSplitter(protoTag)
         } else null
 

@@ -69,7 +69,7 @@ class WsPoolTest {
     // Real, unconnected TLS sockets exercise abort/ownership without network or Android APIs.
     private fun webSocket(socket: SSLSocket): RawWebSocket =
         RawWebSocket::class.java.getDeclaredConstructor(
-            SSLSocket::class.java, InputStream::class.java, OutputStream::class.java,
+            java.net.Socket::class.java, InputStream::class.java, OutputStream::class.java,
         ).also { it.isAccessible = true }.newInstance(
             socket, ByteArrayInputStream(byteArrayOf()), ByteArrayOutputStream(),
         )

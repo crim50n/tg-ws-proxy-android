@@ -80,7 +80,8 @@
     <string name="settings_dc_hint">Format: DC:IP (one per line)\nExample: 2:149.154.167.220</string>
     <string name="settings_dc_description">Advanced setting. Each line assigns a direct WebSocket target to a Telegram datacenter. Remove a line to use an enabled fallback route.</string>
     <string name="settings_auto_optimize">Configure connection automatically</string>
-    <string name="settings_auto_optimize_desc">Chooses routes and safe connection defaults. Turn this off to configure the options below manually.</string>
+    <string name="settings_auto_optimize_desc">Chooses routes, Cloudflare domains and connection defaults. Turn off to use your manual choices. Worker and protocol settings remain in effect.</string>
+    <string name="settings_cf_transport">Cloudflare transport</string>
     <string name="settings_cf_enable">Use Cloudflare fallback</string>
     <string name="settings_cf_enable_desc">Adds an alternate route when direct connections are blocked or unreliable.</string>
     <string name="settings_route_priority">Route order</string>
@@ -91,9 +92,9 @@
     <string name="settings_route_cf_desc">Cloudflare → WebSocket → TCP. Try this if Telegram media does not load.</string>
     <string name="settings_cf_priority">After WebSocket fails, try Cloudflare before TCP</string>
     <string name="settings_cf_priority_desc">When off, TCP is tried before Cloudflare.</string>
-    <string name="settings_cf_custom_domain">Use only a custom Cloudflare domain</string>
-    <string name="settings_cf_custom_domain_desc">Replaces the shared domain list with this domain. Use it only when shared domains are consistently unavailable.</string>
-    <string name="settings_cf_domain_label">Domain</string>
+    <string name="settings_cf_custom_domain">Use custom Cloudflare domains</string>
+    <string name="settings_cf_custom_domain_desc">Replaces the shared domain list. Enter up to 32 base hostnames, one per line, without the kws prefix, scheme, port or path.</string>
+    <string name="settings_cf_domain_label">Domains</string>
     <string name="settings_cf_test">Test and select a domain</string>
     <string name="settings_cf_test_desc">Tests available domains against Telegram datacenters and selects the fastest working one for the current proxy run.</string>
     <string name="settings_cf_testing">Testing…</string>
@@ -255,4 +256,17 @@
     <string name="about_limits_text">Not a VPN or an anonymity guarantee. The WS client does not verify server certificates; direct TCP adds no TLS. Telegram message encryption is separate.</string>
     <string name="about_updates_note">Updates come from GitHub. In-app downloads are checked for SHA-256, package, version, and signing certificate; installation requires Android permission and your confirmation.</string>
     <string name="about_tabler_icons">Tabler Icons · MIT</string>
+    <string name="settings_cf_secure">Use TLS for Cloudflare (port 443)</string>
+    <string name="settings_cf_secure_desc">When off, Cloudflare and Workers use port 80 without TLS. HTTP/2 becomes unavailable.</string>
+    <string name="settings_h2_media">HTTP/2 media fallback</string>
+    <string name="settings_h2_media_desc">Use a shared HTTP/2 connection for media before WebSocket fallback. Requires Cloudflare, TLS and non-test DCs.</string>
+    <string name="settings_worker_domains">Cloudflare Worker domains</string>
+    <string name="settings_worker_domains_desc">One compatible Worker domain per line (up to 32). Tried before CF/TCP, even when Cloudflare is off. Leave empty to disable.</string>
+    <string name="settings_fake_tls_domain">Fake TLS domain</string>
+    <string name="settings_fake_tls_domain_desc">Leave empty to disable camouflage. After changing the domain, add the updated proxy link in Telegram.</string>
+    <string name="settings_force_test_dc">Force Telegram test DCs</string>
+    <string name="settings_force_test_dc_desc">For test accounts only. Disables regular Cloudflare and HTTP/2; configured Workers remain available.</string>
+    <string name="settings_proxy_protocol">Require PROXY protocol v1</string>
+    <string name="settings_proxy_protocol_desc">Only behind a trusted L4 proxy sending a PROXY v1 header. Direct Telegram connections will not work when enabled.</string>
+    <string name="validation_domain_list">Enter up to 32 valid hostnames, separated by lines or commas; do not include schemes, ports or paths.</string>
 </resources>
