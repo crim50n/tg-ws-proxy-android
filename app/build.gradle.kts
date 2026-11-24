@@ -16,8 +16,8 @@ android {
         applicationId = "dev.minios.tgwsproxy"
         minSdk = 26
         targetSdk = 34
-        versionCode = 13
-        versionName = "2.1.0"
+        versionCode = 14
+        versionName = "2.1.1"
     }
 
     val hasPropertiesFile = File("app/keystore/signing.properties").exists()

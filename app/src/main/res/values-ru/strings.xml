@@ -254,6 +254,7 @@
     <string name="about_tabler_icons">Tabler Icons · MIT</string>
     <string name="settings_cf_secure">TLS для Cloudflare (порт 443)</string>
     <string name="settings_cf_secure_desc">При отключении Cloudflare и Workers используют порт 80 без TLS. HTTP/2 становится недоступен.</string>
+    <string name="connection_advice_disable_cf_tls">Не удалось подключиться через Cloudflare после нескольких попыток. Попробуйте отключить TLS в разделе «Настройки → Подключение → Транспорт Cloudflare», затем выйдите из настроек. Соединение перейдёт на порт 80 без TLS, а HTTP/2 станет недоступен. Если это не поможет, включите TLS обратно.</string>
     <string name="settings_h2_media">HTTP/2 для медиа</string>
     <string name="settings_h2_media_desc">Общее HTTP/2-соединение для медиа перед переходом к WebSocket. Нужны включённый Cloudflare, TLS и нетестовые DC.</string>
     <string name="settings_worker_domains">Домены Cloudflare Workers</string>

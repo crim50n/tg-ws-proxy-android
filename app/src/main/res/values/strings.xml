@@ -258,6 +258,7 @@
     <string name="about_tabler_icons">Tabler Icons · MIT</string>
     <string name="settings_cf_secure">Use TLS for Cloudflare (port 443)</string>
     <string name="settings_cf_secure_desc">When off, Cloudflare and Workers use port 80 without TLS. HTTP/2 becomes unavailable.</string>
+    <string name="connection_advice_disable_cf_tls">Cloudflare connections have failed repeatedly. In Settings → Connection → Cloudflare transport, try turning off TLS for Cloudflare, then exit Settings to apply it. This uses port 80 without TLS and disables HTTP/2. Turn TLS back on if it does not help.</string>
     <string name="settings_h2_media">HTTP/2 media fallback</string>
     <string name="settings_h2_media_desc">Use a shared HTTP/2 connection for media before WebSocket fallback. Requires Cloudflare, TLS and non-test DCs.</string>
     <string name="settings_worker_domains">Cloudflare Worker domains</string>

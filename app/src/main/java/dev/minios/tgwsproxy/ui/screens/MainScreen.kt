@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.minios.tgwsproxy.R
 import dev.minios.tgwsproxy.diagnostics.ConnectionAdvice
+import dev.minios.tgwsproxy.diagnostics.shouldSuggestDisablingCloudflareTls
 import dev.minios.tgwsproxy.proxy.ConnectivitySnapshot
 import dev.minios.tgwsproxy.proxy.MtProtoConstants
 import dev.minios.tgwsproxy.proxy.ProxyConfig
@@ -56,6 +57,16 @@ fun MainScreen(
     onOpenUpdate: () -> Unit,
 ) {
     val isRunning = serviceState == ProxyServiceState.RUNNING
+    val adviceMessage = if (shouldSuggestDisablingCloudflareTls(connectivity, config)) {
+        R.string.connection_advice_disable_cf_tls
+    } else {
+        when (connectionAdvice) {
+            ConnectionAdvice.ENABLE_CLOUDFLARE -> R.string.connection_advice_enable_cf
+            ConnectionAdvice.USE_CLOUDFLARE_FIRST -> R.string.connection_advice_cf_first
+            ConnectionAdvice.USE_DIRECT_FIRST -> R.string.connection_advice_direct_first
+            null -> null
+        }
+    }
     val isActive = serviceState != ProxyServiceState.STOPPED
     val proxyLink = remember(config) { config.proxyLink() }
     var menuExpanded by remember { mutableStateOf(false) }
@@ -176,14 +187,14 @@ fun MainScreen(
                 }
 
                 AnimatedVisibility(
-                    visible = isRunning && connectionAdvice != null,
+                    visible = isRunning && adviceMessage != null,
                     enter = fadeIn() + expandVertically(),
                     exit = fadeOut() + shrinkVertically(),
                 ) {
-                    if (connectionAdvice != null) {
+                    if (adviceMessage != null) {
                         Column {
                             Spacer(modifier = Modifier.height(16.dp))
-                            ConnectionAdviceCard(connectionAdvice)
+                            ConnectionAdviceCard(adviceMessage)
                         }
                     }
                 }
@@ -367,13 +378,7 @@ private fun ConnectivityCard(snapshot: ConnectivitySnapshot) {
 }
 
 @Composable
-private fun ConnectionAdviceCard(advice: ConnectionAdvice) {
-    val message =
-        when (advice) {
-            ConnectionAdvice.ENABLE_CLOUDFLARE -> R.string.connection_advice_enable_cf
-            ConnectionAdvice.USE_CLOUDFLARE_FIRST -> R.string.connection_advice_cf_first
-            ConnectionAdvice.USE_DIRECT_FIRST -> R.string.connection_advice_direct_first
-        }
+private fun ConnectionAdviceCard(@androidx.annotation.StringRes message: Int) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
