@@ -1,23 +1,7 @@
 package dev.minios.tgwsproxy.diagnostics
 
 import dev.minios.tgwsproxy.proxy.ConnectivitySnapshot
-import dev.minios.tgwsproxy.proxy.ProxyConfig
-import dev.minios.tgwsproxy.proxy.RouteKey
 import dev.minios.tgwsproxy.proxy.TransportRoute
-
-internal fun shouldSuggestDisablingCloudflareTls(
-    snapshot: ConnectivitySnapshot,
-    config: ProxyConfig,
-): Boolean {
-    val usesCloudflare = !config.forceTestDc && (config.autoOptimizeConnection || config.cfProxyEnabled)
-    if (!config.cfSecure || (!usesCloudflare && config.cfWorkerDomains.isEmpty())) return false
-    if (!snapshot.internetConfirmed) return false
-
-    return snapshot.exhausted.any { target ->
-        val route = RouteKey(target.dc, target.media, TransportRoute.CLOUDFLARE)
-        (snapshot.routes[route]?.failures ?: 0) >= 2
-    }
-}
 
 fun analyzeConnectivity(
     snapshot: ConnectivitySnapshot,

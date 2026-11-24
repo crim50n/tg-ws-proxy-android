@@ -360,7 +360,8 @@ class TgWsProxyServer(
         }
 
         try {
-            var input = clientSocket.getInputStream()
+            val wireInput = ClientSetupInput(clientSocket)
+            var input: java.io.InputStream = wireInput
             var output = clientSocket.getOutputStream()
 
             // Set handshake read timeout (10s, matching Python asyncio.wait_for(..., timeout=10))
@@ -449,34 +450,33 @@ class TgWsProxyServer(
                 telegramEncryptor = relayInit.telegramEncryptor,
             )
 
-            val upstream = bridge.connectUpstream(
-                dc = absDc,
-                isMedia = isMedia,
-                config = if (isTestDc) config.copy(forceTestDc = true) else config,
-                pool = wsPool,
-                protoTag = handshake.protoTag,
-                relayInit = relayInit.initPacket,
-                tcpFallback = tcpFallback,
-                epoch = epoch,
-            )
-            if (!connectivity.recordIfCurrent(epoch) {
-                if (running.get() && !stopRequested.get()) activeUpstreams.add(upstream)
-            } || upstream !in activeUpstreams) {
-                upstream.abort()
-                return
+            val upstream = wireInput.duringUpstreamSetup(Bridge.UpstreamConnection::abort) {
+                bridge.connectUpstream(
+                    dc = absDc,
+                    isMedia = isMedia,
+                    config = if (isTestDc) config.copy(forceTestDc = true) else config,
+                    pool = wsPool,
+                    protoTag = handshake.protoTag,
+                    relayInit = relayInit.initPacket,
+                    tcpFallback = tcpFallback,
+                    epoch = epoch,
+                )
             }
-            DiagnosticLogger.event(
-                "upstream_connected",
-                "dc" to absDc,
-                "media" to isMedia,
-                "route" to upstream.type,
-            )
-
-            if (globalVerbose) {
-                Log.d(TAG, "Upstream connected: ${upstream.type} for DC $absDc from $clientAddr")
-            }
-
             try {
+                if (!connectivity.recordIfCurrent(epoch) {
+                    if (running.get() && !stopRequested.get()) activeUpstreams.add(upstream)
+                } || upstream !in activeUpstreams) return
+                DiagnosticLogger.event(
+                    "upstream_connected",
+                    "dc" to absDc,
+                    "media" to isMedia,
+                    "route" to upstream.type,
+                )
+
+                if (globalVerbose) {
+                    Log.d(TAG, "Upstream connected: ${upstream.type} for DC $absDc from $clientAddr")
+                }
+
                 bridge.bridgeReencrypt(
                     clientInput = input,
                     clientOutput = output,

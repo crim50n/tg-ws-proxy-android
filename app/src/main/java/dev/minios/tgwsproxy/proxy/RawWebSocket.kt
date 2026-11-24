@@ -9,6 +9,7 @@ import java.net.Socket
 import java.net.UnknownHostException
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.TrustManager
@@ -23,9 +24,14 @@ class RawWebSocket private constructor(
     private val socket: Socket,
     private val input: InputStream,
     private val output: OutputStream,
+    private val transportSocket: Socket,
 ) : AutoCloseable {
 
+    private constructor(socket: Socket, input: InputStream, output: OutputStream) :
+        this(socket, input, output, socket)
+
     private val random = SecureRandom()
+    private val aborted = AtomicBoolean()
     @Volatile
     private var closed = false
 
@@ -39,6 +45,7 @@ class RawWebSocket private constructor(
         private const val MAX_HTTP_RESPONSE_BYTES = 32 * 1024
         private const val MAX_FRAME_PAYLOAD = 16 * 1024 * 1024
         private const val WS_ACCEPT_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+        private const val RELAY_INIT_TIMEOUT_MS = 10_000L
         private val defaultCfDnsResolver = CfDnsResolver()
 
         private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -58,6 +65,7 @@ class RawWebSocket private constructor(
          * @param port TCP port
          * @param connectTimeoutMs connection timeout in milliseconds
          * @param bufferSize socket buffer size
+         * @param onUpgradeRejected reports a known status immediately and again if a redirect has a Location
          */
         fun connect(
             connectHost: String,
@@ -68,37 +76,62 @@ class RawWebSocket private constructor(
             bufferSize: Int = 256 * 1024,
             onSocketCreated: ((Socket) -> Unit)? = null,
             secure: Boolean = true,
+            onUpgradeRejected: ((WsHandshakeError) -> Unit)? = null,
+            onStage: TransportStageObserver? = null,
+            checkCurrent: () -> Unit = {},
+            readRedirectLocation: Boolean = true,
         ): RawWebSocket {
-            // Reuse global TLS context (matching Python's module-level ssl.SSLContext)
-            val factory = globalSslContext.socketFactory
-
-            val socket = if (secure) factory.createSocket() as SSLSocket else Socket()
+            checkCurrent()
+            // Keep the TCP socket separately so timeout/cancellation can interrupt I/O without
+            // waiting for a TLS close_notify or for the WebSocket output lock.
+            val transport = Socket()
+            var socket = transport
             val clampedTimeout = connectTimeoutMs.coerceIn(1, 10000)
             try {
-                onSocketCreated?.invoke(socket)
-                socket.tcpNoDelay = true
-                socket.keepAlive = true
-                socket.sendBufferSize = bufferSize
-                socket.receiveBufferSize = bufferSize
-                socket.soTimeout = clampedTimeout
-
-                // Set SNI hostname for TLS while connecting to the configured IP.
-                if (socket is SSLSocket) {
-                    val sslParams = socket.sslParameters
-                    sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
-                    socket.sslParameters = sslParams
+                onSocketCreated?.invoke(transport)
+                transport.tcpNoDelay = true
+                transport.keepAlive = true
+                transport.sendBufferSize = bufferSize
+                transport.receiveBufferSize = bufferSize
+                transport.soTimeout = clampedTimeout
+                val endpoint = transportStage("address_resolution", onStage) {
+                    InetSocketAddress(connectHost, port).also { if (it.isUnresolved) throw UnknownHostException() }
                 }
-
-                socket.connect(InetSocketAddress(connectHost, port), clampedTimeout)
-                if (socket is SSLSocket) socket.startHandshake()
-                return finishUpgrade(socket, domain, path)
+                checkCurrent()
+                transportStage("tcp_connect", onStage) { transport.connect(endpoint, clampedTimeout) }
+                checkCurrent()
+                if (secure) transportStage("tls_handshake", onStage) {
+                    val tls = globalSslContext.socketFactory.createSocket(transport, domain, port, true) as SSLSocket
+                    socket = tls
+                    val sslParams = tls.sslParameters
+                    sslParams.serverNames = listOf(javax.net.ssl.SNIHostName(domain))
+                    tls.sslParameters = sslParams
+                    tls.soTimeout = clampedTimeout
+                    tls.startHandshake()
+                }
+                checkCurrent()
+                return transportStage("http_upgrade", onStage) {
+                    finishUpgrade(socket, domain, path, onUpgradeRejected, transport, readRedirectLocation)
+                }
             } catch (e: Exception) {
-                try { socket.close() } catch (_: Exception) {}
+                closeTransport(transport, socket)
                 throw e
             }
         }
 
-        private fun finishUpgrade(socket: Socket, domain: String, path: String): RawWebSocket {
+        private fun closeTransport(transport: Socket, socket: Socket) {
+            try { transport.close() } catch (_: Exception) {}
+            if (socket !== transport) try { socket.close() } catch (_: Exception) {}
+        }
+
+        private fun finishUpgrade(
+            socket: Socket,
+            domain: String,
+            path: String,
+            onUpgradeRejected: ((WsHandshakeError) -> Unit)?,
+            transport: Socket,
+            readRedirectLocation: Boolean,
+        ): RawWebSocket {
             val input = socket.getInputStream()
             val output = socket.getOutputStream()
 
@@ -119,24 +152,7 @@ class RawWebSocket private constructor(
             }
             output.write(request.toByteArray())
             output.flush()
-            val response = readHttpResponse(input)
-
-            val lines = response.lineSequence().toList()
-            val statusLine = lines.firstOrNull() ?: ""
-
-            // Accept any HTTP version with status 101.
-            val parts = statusLine.split(" ", limit = 3)
-            val statusCode = if (parts.size >= 2) parts[1].toIntOrNull() ?: 0 else 0
-
-            if (statusCode != 101) {
-                // Extract Location header for redirect detection
-                val location = response.lines()
-                    .firstOrNull { it.startsWith("Location:", ignoreCase = true) }
-                    ?.substringAfter(":")?.trim()
-                throw WsHandshakeError(statusCode, statusLine, location)
-            }
-
-            val headers = lines.drop(1)
+            val headers = readUpgradeHeaders(input, readRedirectLocation, onUpgradeRejected)
                 .mapNotNull { line ->
                     val separator = line.indexOf(':')
                     if (separator <= 0) null else {
@@ -163,7 +179,7 @@ class RawWebSocket private constructor(
             // Clear soTimeout for the data phase — no read timeout on established connections
             socket.soTimeout = 0
 
-            return RawWebSocket(socket, input, output)
+            return RawWebSocket(socket, input, output, transport)
         }
 
         /**
@@ -186,6 +202,9 @@ class RawWebSocket private constructor(
             cachedCfAddress: (String) -> String? = defaultCfDnsResolver::cached,
             secure: Boolean = true,
             isTestDc: Boolean = false,
+            onUpgradeRejected: ((WsHandshakeError) -> Unit)? = null,
+            onStage: TransportStageObserver? = null,
+            checkCurrent: () -> Unit = {},
         ): RawWebSocket {
             val domains = if (cfProxyDomain != null) {
                 val wsDc = if (dc == 203) 2 else dc
@@ -199,7 +218,14 @@ class RawWebSocket private constructor(
             val connectTarget = if (cfProxyDomain != null) domains.first() else targetIp
 
             var lastError: Exception? = null
-            for (domain in domains) {
+            for ((index, domain) in domains.withIndex()) {
+                val finalAlias = index == domains.lastIndex
+                val publishRejection: ((WsHandshakeError) -> Unit)? = onUpgradeRejected?.let { publish ->
+                    { rejection ->
+                        // A deadline during an earlier redirect is not proof that *all* aliases redirect.
+                        if (!rejection.isRedirect || finalAlias) publish(rejection)
+                    }
+                }
                 try {
                     return connect(
                         connectHost = if (cfProxyDomain != null) {
@@ -214,6 +240,12 @@ class RawWebSocket private constructor(
                         onSocketCreated = onSocketCreated,
                         secure = cfProxyDomain == null || secure,
                         port = if (cfProxyDomain != null && !secure) 80 else 443,
+                        onUpgradeRejected = publishRejection,
+                        onStage = onStage,
+                        checkCurrent = checkCurrent,
+                        // Intermediate redirects only need a status: don't spend the shared
+                        // deadline waiting for a Location we won't follow or return.
+                        readRedirectLocation = finalAlias,
                     )
                 } catch (e: WsHandshakeError) {
                     lastError = e
@@ -229,7 +261,8 @@ class RawWebSocket private constructor(
                     if (e is CancellationException) throw e
                     var connectionError = e
                     if (cfProxyDomain != null && e is UnknownHostException) {
-                        val resolvedAddress = resolveCfAddress(domain)
+                        checkCurrent()
+                        val resolvedAddress = transportStage("dns_fallback", onStage) { resolveCfAddress(domain) }
                         if (resolvedAddress != null) {
                             try {
                                 return connect(
@@ -240,6 +273,9 @@ class RawWebSocket private constructor(
                                     onSocketCreated = onSocketCreated,
                                     secure = secure,
                                     port = if (secure) 443 else 80,
+                                    onUpgradeRejected = publishRejection,
+                                    onStage = onStage,
+                                    checkCurrent = checkCurrent,
                                 )
                             } catch (fallbackError: Exception) {
                                 if (fallbackError is CancellationException) throw fallbackError
@@ -256,25 +292,50 @@ class RawWebSocket private constructor(
             throw lastError ?: WebSocketException("Failed to connect to DC $dc")
         }
 
-        private fun readHttpResponse(input: InputStream): String {
-            val sb = StringBuilder()
-            var prev = 0
-            while (true) {
-                val b = input.read()
-                if (b == -1) {
-                    break
+        internal fun readUpgradeHeaders(
+            input: InputStream,
+            readRedirectLocation: Boolean = true,
+            onUpgradeRejected: ((WsHandshakeError) -> Unit)? = null,
+        ): List<String> {
+            var bytesRead = 0
+            fun readLine(): String? {
+                val line = StringBuilder()
+                while (true) {
+                    val byte = input.read()
+                    if (byte == -1) return line.takeIf { it.isNotEmpty() }?.toString()
+                    if (++bytesRead > MAX_HTTP_RESPONSE_BYTES) {
+                        throw WebSocketException("WebSocket upgrade response too large")
+                    }
+                    if (byte == '\n'.code) return line.toString().removeSuffix("\r")
+                    line.append(byte.toChar())
                 }
-                sb.append(b.toChar())
-                if (sb.length > MAX_HTTP_RESPONSE_BYTES) {
-                    throw WebSocketException("WebSocket upgrade response too large")
-                }
-                if (prev == '\r'.code && b == '\n'.code && sb.length >= 4) {
-                    val last4 = sb.substring(sb.length - 4)
-                    if (last4 == "\r\n\r\n") break
-                }
-                prev = b
             }
-            return sb.toString()
+
+            // Accept any HTTP version with status 101.
+            val statusLine = readLine().orEmpty()
+            val statusCode = statusLine.split(" ", limit = 3).getOrNull(1)?.toIntOrNull() ?: 0
+            if (statusCode != 101) {
+                val rejection = WsHandshakeError(statusCode, statusLine, null)
+                // Publish before reading more headers: the outer deadline may fire during a redirect's
+                // header read, but must not replace a known rejection with a transport timeout.
+                onUpgradeRejected?.invoke(rejection)
+                if (!rejection.isRedirect || !readRedirectLocation) throw rejection
+
+                val location = try {
+                    generateSequence { readLine()?.takeIf { it.isNotEmpty() } }
+                        .firstOrNull { it.startsWith("Location:", ignoreCase = true) }
+                        ?.substringAfter(':')?.trim()
+                } catch (_: IOException) {
+                    null // Missing redirect metadata does not erase the status.
+                } catch (_: WebSocketException) {
+                    null
+                }
+                if (location == null) throw rejection
+                val redirect = WsHandshakeError(statusCode, statusLine, location)
+                onUpgradeRejected?.invoke(redirect)
+                throw redirect
+            }
+            return generateSequence { readLine()?.takeIf { it.isNotEmpty() } }.toList()
         }
     }
 
@@ -285,6 +346,20 @@ class RawWebSocket private constructor(
         // Fail before writing to an already closed socket.
         if (closed) throw IOException("WebSocket closed")
         sendFrame(OPCODE_BINARY, data)
+    }
+
+    /** Bound just the first frame; streaming sends retain their existing behavior. */
+    internal suspend fun sendRelayInit(
+        data: ByteArray,
+        timeoutMs: Long = RELAY_INIT_TIMEOUT_MS,
+        checkCurrent: () -> Unit = {},
+    ) {
+        boundedTransportAttempt(timeoutMs, closeOnFailure = AutoCloseable(::abort)) { attempt ->
+            if (!attempt.isActive) throw CancellationException("WebSocket relay init cancelled")
+            checkCurrent()
+            sendBinary(data)
+            checkCurrent()
+        }
     }
 
     fun sendPing() {
@@ -377,7 +452,9 @@ class RawWebSocket private constructor(
     // Idle pool disposal must not block trying to send a CLOSE on a dead route.
     internal fun abort() {
         closed = true
-        try { socket.close() } catch (_: Exception) {}
+        if (!aborted.compareAndSet(false, true)) return
+        try { transportSocket.close() } catch (_: Exception) {}
+        if (socket !== transportSocket) dispatchTransportCleanup { socket.close() }
     }
 
     /**

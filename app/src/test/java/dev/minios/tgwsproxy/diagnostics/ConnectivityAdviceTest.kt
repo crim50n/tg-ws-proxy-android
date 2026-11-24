@@ -3,65 +3,15 @@ package dev.minios.tgwsproxy.diagnostics
 import dev.minios.tgwsproxy.proxy.ConnectivitySnapshot
 import dev.minios.tgwsproxy.proxy.ConnectivityTracker
 import dev.minios.tgwsproxy.proxy.NetworkStatus
-import dev.minios.tgwsproxy.proxy.ProxyConfig
 import dev.minios.tgwsproxy.proxy.RouteKey
 import dev.minios.tgwsproxy.proxy.RouteObservation
 import dev.minios.tgwsproxy.proxy.RoutePhase
-import dev.minios.tgwsproxy.proxy.RouteTarget
 import dev.minios.tgwsproxy.proxy.TransportRoute
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ConnectivityAdviceTest {
-    @Test
-    fun `TLS advice needs repeated CF failures and exhausted routes for the same target`() {
-        val tracker = ConnectivityTracker()
-        tracker.updateNetwork(1L, NetworkStatus.ONLINE)
-        val epoch = tracker.state.value.epoch
-        val target = RouteTarget(2, false)
-        val cf = RouteKey(2, false, TransportRoute.CLOUDFLARE)
-        val tcp = RouteKey(2, false, TransportRoute.TCP)
-        val config = ProxyConfig()
-        fun advised() = shouldSuggestDisablingCloudflareTls(tracker.state.value, config)
-
-        assertFalse(advised())
-        tracker.record(epoch, cf, RoutePhase.FAILED)
-        tracker.recordExhausted(epoch, target)
-        assertFalse(advised())
-        tracker.record(epoch, cf, RoutePhase.FAILED)
-        assertTrue(advised())
-        tracker.record(epoch, tcp, RoutePhase.RESPONDING)
-        tracker.recordExhausted(epoch, RouteTarget(3, false))
-        assertFalse(advised())
-        tracker.updateNetwork(2L, NetworkStatus.ONLINE)
-        assertFalse(advised())
-    }
-
-    @Test
-    fun `TLS advice requires usable internet and an enabled secure CF transport`() {
-        val target = RouteTarget(2, true)
-        val snapshot = ConnectivitySnapshot(
-            network = NetworkStatus.ONLINE,
-            exhausted = setOf(target),
-            routes = mapOf(
-                RouteKey(2, true, TransportRoute.CLOUDFLARE) to RouteObservation(RoutePhase.FAILED, failures = 2),
-            ),
-        )
-        val config = ProxyConfig(autoOptimizeConnection = false, cfProxyEnabled = false)
-        assertFalse(shouldSuggestDisablingCloudflareTls(snapshot, config))
-        assertFalse(shouldSuggestDisablingCloudflareTls(snapshot, config.copy(forceTestDc = true, cfProxyEnabled = true)))
-        val automatic = config.copy(autoOptimizeConnection = true)
-        assertTrue(shouldSuggestDisablingCloudflareTls(snapshot, automatic))
-        assertTrue(shouldSuggestDisablingCloudflareTls(snapshot, config.copy(cfWorkerDomains = listOf("example.com"))))
-        assertFalse(shouldSuggestDisablingCloudflareTls(snapshot, automatic.copy(cfSecure = false)))
-        for (status in listOf(NetworkStatus.OFFLINE, NetworkStatus.CAPTIVE_PORTAL, NetworkStatus.UNVERIFIED)) {
-            assertFalse(shouldSuggestDisablingCloudflareTls(snapshot.copy(network = status), automatic))
-        }
-    }
-
     @Test
     fun `working WS data prevents fallback even after original handshake evidence expired`() {
         val candidate = cloudflareCandidate()

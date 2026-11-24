@@ -1,15 +1,161 @@
 package dev.minios.tgwsproxy.proxy
 
+import java.io.EOFException
+import java.io.InputStream
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLSocket
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 
 class RawWebSocketTransportTest {
+    private fun responseThatStalls(prefix: String, beforeTimeout: () -> Unit = {}): InputStream {
+        val bytes = prefix.byteInputStream(Charsets.US_ASCII)
+        return object : InputStream() {
+            override fun read(): Int {
+                val byte = bytes.read()
+                if (byte >= 0) return byte
+                beforeTimeout()
+                throw SocketTimeoutException("Incomplete response")
+            }
+        }
+    }
+
+    @Test fun completedRateLimitIsNotAHeaderTimeout() {
+        val rejection = assertThrows(WsHandshakeError::class.java) {
+            RawWebSocket.readUpgradeHeaders(responseThatStalls("HTTP/1.1 429 Too Many Requests\r\n") {
+                fail("Must not wait for headers after a non-redirect rejection")
+            })
+        }
+        assertEquals(429, rejection.statusCode)
+        assertFalse(isTransportTimeout(rejection))
+    }
+
+    @Test fun stalledRedirectHeadersCannotEraseKnownStatus() {
+        var published: WsHandshakeError? = null
+        val rejection = assertThrows(WsHandshakeError::class.java) {
+            RawWebSocket.readUpgradeHeaders(
+                responseThatStalls("HTTP/1.1 302 Found\r\nServer: test\r\n") {
+                    assertEquals(302, published?.statusCode)
+                },
+                onUpgradeRejected = { published = it },
+            )
+        }
+        assertTrue(rejection.isRedirect)
+        assertNull(rejection.location)
+        assertFalse(isTransportTimeout(rejection))
+    }
+
+    @Test fun intermediateAliasRedirectDoesNotWaitForUnusedLocation() {
+        val redirect = assertThrows(WsHandshakeError::class.java) {
+            RawWebSocket.readUpgradeHeaders(
+                responseThatStalls("HTTP/1.1 302 Found\r\n") { fail("Next alias should be tried immediately") },
+                readRedirectLocation = false,
+            )
+        }
+        assertTrue(redirect.isRedirect)
+        assertNull(redirect.location)
+    }
+
+    @Test fun keepsRedirectLocationWithoutWaitingForRemainingHeaders() {
+        val published = mutableListOf<WsHandshakeError>()
+        val rejection = assertThrows(WsHandshakeError::class.java) {
+            RawWebSocket.readUpgradeHeaders(
+                responseThatStalls("HTTP/1.1 307 Temporary Redirect\r\nlocation: https://redirect.example/\r\n") {
+                    fail("Location is complete; remaining headers are immaterial")
+                },
+                onUpgradeRejected = { published.add(it) },
+            )
+        }
+        assertEquals(307, rejection.statusCode)
+        assertEquals("https://redirect.example/", rejection.location)
+        assertEquals(listOf(null, rejection.location), published.map { it.location })
+    }
+
+    @Test fun stalledSwitchingProtocolsHeadersStillTimeOut() {
+        assertThrows(SocketTimeoutException::class.java) {
+            RawWebSocket.readUpgradeHeaders(responseThatStalls("HTTP/1.1 101 Switching Protocols\r\n")) {
+                fail("An incomplete upgrade is not an HTTP rejection")
+            }
+        }
+    }
+
+    @Test fun cancelledTlsSetupClosesTcpBeforeHandshakeFinishes() = runBlocking {
+        val clientHello = CompletableDeferred<Unit>()
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            ServerSocket(0).use { server ->
+                server.soTimeout = 3_000
+                val peer = executor.submit<Boolean> {
+                    server.accept().use { socket ->
+                        socket.soTimeout = 3_000
+                        val input = socket.getInputStream()
+                        if (input.read() < 0) throw EOFException("Expected TLS ClientHello")
+                        clientHello.complete(Unit)
+                        while (input.read() >= 0) Unit
+                        true
+                    }
+                }
+                val pending = async {
+                    boundedTransportAttempt(10_000, RawWebSocket::abort) { attempt ->
+                        RawWebSocket.connect("127.0.0.1", "telegram.example", port = server.localPort,
+                            onSocketCreated = attempt::register)
+                    }
+                }
+                withTimeout(3_000) { clientHello.await() }
+                pending.cancelAndJoin()
+                assertTrue(peer.get(3, TimeUnit.SECONDS))
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    @Test fun incompleteUpgradeIsBoundedByWholeAttemptAndClosesTheSocket() = runBlocking {
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            ServerSocket(0).use { server ->
+                server.soTimeout = 3_000
+                val peer = executor.submit<Boolean> {
+                    server.accept().use { socket ->
+                        socket.soTimeout = 3_000
+                        val input = socket.getInputStream()
+                        val header = StringBuilder()
+                        while (!header.endsWith("\r\n\r\n")) {
+                            val next = input.read()
+                            check(next >= 0)
+                            header.append(next.toChar())
+                        }
+                        socket.getOutputStream().apply {
+                            write("HTTP/1.1 101 Switching Protocols\r\n".toByteArray())
+                            flush()
+                        }
+                        input.read() == -1
+                    }
+                }
+                val outcome = runCatching {
+                    boundedTransportAttempt(500, RawWebSocket::abort) { attempt ->
+                        RawWebSocket.connect("127.0.0.1", "worker.example", port = server.localPort,
+                            secure = false, onSocketCreated = attempt::register)
+                    }
+                }
+                assertTrue(outcome.exceptionOrNull() is SocketTimeoutException)
+                assertTrue(peer.get(3, TimeUnit.SECONDS))
+            }
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
     @Test fun optionalPlainWorkerTransportUpgradesAndExchangesMaskedBinaryFrames() {
         val executor = Executors.newSingleThreadExecutor()
         ServerSocket(0).use { server ->

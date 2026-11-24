@@ -256,9 +256,8 @@
     <string name="about_limits_text">Not a VPN or an anonymity guarantee. The WS client does not verify server certificates; direct TCP adds no TLS. Telegram message encryption is separate.</string>
     <string name="about_updates_note">Updates come from GitHub. In-app downloads are checked for SHA-256, package, version, and signing certificate; installation requires Android permission and your confirmation.</string>
     <string name="about_tabler_icons">Tabler Icons · MIT</string>
-    <string name="settings_cf_secure">Use TLS for Cloudflare (port 443)</string>
-    <string name="settings_cf_secure_desc">When off, Cloudflare and Workers use port 80 without TLS. HTTP/2 becomes unavailable.</string>
-    <string name="connection_advice_disable_cf_tls">Cloudflare connections have failed repeatedly. In Settings → Connection → Cloudflare transport, try turning off TLS for Cloudflare, then exit Settings to apply it. This uses port 80 without TLS and disables HTTP/2. Turn TLS back on if it does not help.</string>
+    <string name="settings_cf_secure">Prefer TLS for Cloudflare</string>
+    <string name="settings_cf_secure_desc">Tries TLS on port 443 first by default. After timeouts, Cloudflare and Workers can use port 80 without TLS. Turn off to use only port 80; HTTP/2 requires TLS.</string>
     <string name="settings_h2_media">HTTP/2 media fallback</string>
     <string name="settings_h2_media_desc">Use a shared HTTP/2 connection for media before WebSocket fallback. Requires Cloudflare, TLS and non-test DCs.</string>
     <string name="settings_worker_domains">Cloudflare Worker domains</string>

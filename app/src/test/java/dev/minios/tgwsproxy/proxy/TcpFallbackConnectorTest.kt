@@ -5,10 +5,15 @@ import java.io.IOException
 import java.io.OutputStream
 import java.net.Socket
 import java.net.SocketAddress
+import java.net.SocketTimeoutException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -17,7 +22,9 @@ class TcpFallbackConnectorTest {
         val onConnect: () -> Unit = {},
         val output: OutputStream = ByteArrayOutputStream(),
     ) : Socket() {
-        var closed = false
+        private val closed = CountDownLatch(1)
+        fun awaitClosed(): Boolean = closed.await(3, TimeUnit.SECONDS)
+        override fun isClosed(): Boolean = closed.count == 0L
         override fun connect(endpoint: SocketAddress, timeout: Int) {
             assertEquals(10_000, timeout)
             onConnect()
@@ -27,36 +34,41 @@ class TcpFallbackConnectorTest {
         override fun setKeepAlive(on: Boolean) = Unit
         override fun setSendBufferSize(size: Int) = Unit
         override fun setReceiveBufferSize(size: Int) = Unit
-        override fun close() { closed = true }
+        override fun close() { closed.countDown() }
     }
 
     private val init = ByteArray(64) { it.toByte() }
 
+    private suspend inline fun <reified T : Throwable> assertConnectThrows(block: () -> Unit) {
+        val error = runCatching { block() }.exceptionOrNull()
+        assertTrue("Expected ${T::class.simpleName}, got $error", error is T)
+    }
+
     @Test
-    fun sendsInitBeforeReturningAndResetsBackoffOnSuccess() {
+    fun sendsInitBeforeReturningAndResetsBackoffOnSuccess() = runBlocking {
         var now = 0L
         var fail = true
         val sockets = mutableListOf<TestSocket>()
         val connector = TcpFallbackConnector({ now }) {
             TestSocket(onConnect = { if (fail) throw IOException("blocked") }).also { sockets.add(it) }
         }
-        assertThrows(IOException::class.java) { connector.connect("127.0.0.1", 443, 1024, init) }
-        assertTrue(sockets.last().closed)
+        assertConnectThrows<IOException> { connector.connect("127.0.0.1", 443, 1024, init) }
+        assertTrue(sockets.last().awaitClosed())
         assertNull(connector.connect("127.0.0.1", 443, 1024, init))
         now = 30_000
         fail = false
         val connected = connector.connect("127.0.0.1", 443, 1024, init) as TestSocket
         assertArrayEquals(init, (connected.output as ByteArrayOutputStream).toByteArray())
-        assertFalse(connected.closed)
+        assertFalse(connected.isClosed)
         fail = true
-        assertThrows(IOException::class.java) { connector.connect("127.0.0.1", 443, 1024, init) }
+        assertConnectThrows<IOException> { connector.connect("127.0.0.1", 443, 1024, init) }
         now += 30_000
         fail = false
         assertNotNull(connector.connect("127.0.0.1", 443, 1024, init))
     }
 
     @Test
-    fun exponentialBackoffIsCappedAndIndependentPerEndpoint() {
+    fun exponentialBackoffIsCappedAndIndependentPerEndpoint() = runBlocking {
         var now = 0L
         var attempts = 0
         val connector = TcpFallbackConnector({ now }) {
@@ -64,19 +76,19 @@ class TcpFallbackConnectorTest {
             TestSocket(onConnect = { throw IOException("blocked") })
         }
         for (delay in listOf(30_000L, 60_000L, 120_000L, 240_000L, 480_000L, 960_000L, 1_920_000L, 3_600_000L, 3_600_000L)) {
-            assertThrows(IOException::class.java) { connector.connect("127.0.0.1", 443, 1024, init) }
+            assertConnectThrows<IOException> { connector.connect("127.0.0.1", 443, 1024, init) }
             val before = attempts
             now += delay - 1
             assertNull(connector.connect("127.0.0.1", 443, 1024, init))
             assertEquals(before, attempts)
             now++
         }
-        assertThrows(IOException::class.java) { connector.connect("127.0.0.2", 443, 1024, init) }
-        assertThrows(IOException::class.java) { connector.connect("127.0.0.1", 80, 1024, init) }
+        assertConnectThrows<IOException> { connector.connect("127.0.0.2", 443, 1024, init) }
+        assertConnectThrows<IOException> { connector.connect("127.0.0.1", 80, 1024, init) }
     }
 
     @Test
-    fun initWriteFailureClosesSocketAndBacksOff() {
+    fun initWriteFailureClosesSocketAndBacksOff() = runBlocking {
         var failWrite = true
         val output = object : OutputStream() {
             override fun write(b: Int) = Unit
@@ -86,8 +98,8 @@ class TcpFallbackConnectorTest {
         val connector = TcpFallbackConnector({ 0L }) {
             TestSocket(output = output).also { sockets.add(it) }
         }
-        assertThrows(IOException::class.java) { connector.connect("127.0.0.1", 443, 1024, init) }
-        assertTrue(sockets.single().closed)
+        assertConnectThrows<IOException> { connector.connect("127.0.0.1", 443, 1024, init) }
+        assertTrue(sockets.single().awaitClosed())
         assertNull(connector.connect("127.0.0.1", 443, 1024, init))
         connector.reset()
         failWrite = false
@@ -95,17 +107,17 @@ class TcpFallbackConnectorTest {
     }
 
     @Test
-    fun cancellationDoesNotBackOff() {
+    fun cancellationDoesNotBackOff() = runBlocking {
         val sockets = mutableListOf<TestSocket>()
         var active = true
         var cancel = true
         val connector = TcpFallbackConnector({ 0L }) {
             TestSocket(onConnect = { if (cancel) active = false }).also { sockets.add(it) }
         }
-        assertThrows(CancellationException::class.java) {
+        assertConnectThrows<CancellationException> {
             connector.connect("127.0.0.1", 443, 1024, init, isActive = { active })
         }
-        assertTrue(sockets.single().closed)
+        assertTrue(sockets.single().awaitClosed())
         active = true
         // A different endpoint also checks cancellation at entry without creating a socket.
         assertNull(connector.connect("127.0.0.2", 443, 1024, init, isActive = { false }))
@@ -115,7 +127,7 @@ class TcpFallbackConnectorTest {
     }
 
     @Test
-    fun unconfirmedFailureDoesNotBackOffOrIncreaseNextConfirmedBackoff() {
+    fun unconfirmedFailureDoesNotBackOffOrIncreaseNextConfirmedBackoff() = runBlocking {
         var now = 0L
         var attempts = 0
         val connector = TcpFallbackConnector({ now }) {
@@ -123,22 +135,22 @@ class TcpFallbackConnectorTest {
             TestSocket(onConnect = { throw IOException("unavailable") })
         }
         repeat(2) {
-            assertThrows(IOException::class.java) {
+            assertConnectThrows<IOException> {
                 connector.connect("127.0.0.1", 443, 1024, init, canRecordFailure = { false })
             }
         }
         assertEquals(2, attempts)
-        assertThrows(IOException::class.java) {
+        assertConnectThrows<IOException> {
             connector.connect("127.0.0.1", 443, 1024, init, canRecordFailure = { true })
         }
         assertNull(connector.connect("127.0.0.1", 443, 1024, init))
         now = 30_000L
-        assertThrows(IOException::class.java) { connector.connect("127.0.0.1", 443, 1024, init) }
+        assertConnectThrows<IOException> { connector.connect("127.0.0.1", 443, 1024, init) }
         assertEquals(4, attempts)
     }
 
     @Test
-    fun failureGateIsCheckedAfterConnectFails() {
+    fun failureGateIsCheckedAfterConnectFails() = runBlocking {
         var confirmed = true
         val connector = TcpFallbackConnector({ 0L }) {
             TestSocket(onConnect = {
@@ -148,14 +160,14 @@ class TcpFallbackConnectorTest {
         }
         repeat(2) {
             confirmed = true
-            assertThrows(IOException::class.java) {
+            assertConnectThrows<IOException> {
                 connector.connect("127.0.0.1", 443, 1024, init, canRecordFailure = { confirmed })
             }
         }
     }
 
     @Test
-    fun staleRuntimeShutdownDoesNotDisableReplacement() {
+    fun staleRuntimeShutdownDoesNotDisableReplacement() = runBlocking {
         val oldRuntime = TcpFallbackConnector({ 0L }) { TestSocket() }
         val newRuntime = TcpFallbackConnector({ 0L }) { TestSocket() }
         newRuntime.reset()
@@ -165,7 +177,7 @@ class TcpFallbackConnectorTest {
     }
 
     @Test
-    fun concurrentAttemptIsSkippedAndResetRejectsLateResult() {
+    fun concurrentAttemptIsSkippedAndResetRejectsLateResult() = runBlocking {
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
         val socket = TestSocket(onConnect = {
@@ -178,11 +190,11 @@ class TcpFallbackConnectorTest {
         }
         val executor = Executors.newSingleThreadExecutor()
         try {
-            val result = executor.submit<Socket?> { connector.connect("127.0.0.1", 443, 1024, init) }
+            val result = executor.submit<Socket?> { runBlocking { connector.connect("127.0.0.1", 443, 1024, init) } }
             assertTrue(started.await(5, TimeUnit.SECONDS))
             assertNull(connector.connect("127.0.0.1", 443, 1024, init))
             connector.reset(enabled = false)
-            assertTrue(socket.closed)
+            assertTrue(socket.awaitClosed())
             assertNull(connector.connect("127.0.0.1", 443, 1024, init))
             connector.reset()
             release.countDown()
@@ -194,6 +206,52 @@ class TcpFallbackConnectorTest {
         } finally {
             release.countDown()
             executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun blockedInitTimesOutAndDisposesSocketBeforeTheWriteReturns() = runBlocking {
+        val inFlush = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val socket = TestSocket(output = object : OutputStream() {
+            override fun write(b: Int) = Unit
+            override fun flush() {
+                inFlush.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+            }
+        })
+        val connector = TcpFallbackConnector({ 0L }) { socket }
+        try {
+            assertConnectThrows<SocketTimeoutException> {
+                connector.connect("127.0.0.1", 443, 1024, init, relayInitTimeoutMs = 500)
+            }
+            assertEquals(0L, inFlush.count)
+            assertTrue(socket.awaitClosed())
+            assertNull(connector.connect("127.0.0.1", 443, 1024, init))
+        } finally {
+            release.countDown()
+        }
+    }
+
+    @Test
+    fun cancelledConnectClosesPendingSocketWithoutBackoffOrLateInit() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val release = CountDownLatch(1)
+        val first = TestSocket(onConnect = {
+            started.complete(Unit)
+            check(release.await(5, TimeUnit.SECONDS))
+        })
+        var attempts = 0
+        val connector = TcpFallbackConnector({ 0L }) { if (attempts++ == 0) first else TestSocket() }
+        try {
+            val pending = async { connector.connect("127.0.0.1", 443, 1024, init) }
+            started.await()
+            pending.cancelAndJoin()
+            assertTrue(first.awaitClosed())
+            assertNotNull(connector.connect("127.0.0.1", 443, 1024, init))
+            assertEquals(0, (first.output as ByteArrayOutputStream).size())
+        } finally {
+            release.countDown()
         }
     }
 }

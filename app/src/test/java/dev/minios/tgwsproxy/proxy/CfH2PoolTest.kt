@@ -1,6 +1,7 @@
 package dev.minios.tgwsproxy.proxy
 
 import java.io.IOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -83,6 +84,103 @@ class CfH2PoolTest {
             old.cancel(true)
             pool.reset()
             executor.shutdownNow()
+        }
+    }
+
+    @Test fun competingSetupDoesNotWaitAndH2DoesNotReuseAnIneligibleDomain() {
+        val tracker = tracker()
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val calls = AtomicInteger()
+        val pool = CfH2Pool(tracker, CfH2Pool.Hooks(callFactory = { request ->
+            FakeCall(request) { call ->
+                calls.incrementAndGet()
+                started.countDown()
+                release.awaitChecked()
+                call.response()
+            }
+        }))
+        val executor = Executors.newFixedThreadPool(2)
+        val epoch = tracker.state.value.epoch
+        val domains = listOf("example.test")
+        val first = executor.submit<CfH2Pool.Channel?> { pool.open(2, domains, epoch) }
+        try {
+            started.awaitChecked()
+            val competing = executor.submit<CfH2Pool.Channel?> { pool.open(2, domains, epoch) }
+            assertNull(competing.get(1, TimeUnit.SECONDS))
+            release.countDown()
+            assertNotNull(first.get(5, TimeUnit.SECONDS))
+            assertNull(pool.open(2, domains, epoch, tlsAvailable = { false }))
+            assertEquals(1, calls.get())
+        } finally {
+            release.countDown()
+            pool.reset()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test fun cancelledCallerDoesNotCoolDownHostForNextClient() {
+        val tracker = tracker()
+        val epoch = tracker.state.value.epoch
+        val started = CountDownLatch(1)
+        val finish = CountDownLatch(1)
+        val preflights = AtomicInteger()
+        val pool = CfH2Pool(tracker, CfH2Pool.Hooks(callFactory = { request ->
+            FakeCall(request) { call ->
+                if (preflights.incrementAndGet() == 1) {
+                    started.countDown()
+                    finish.awaitChecked()
+                    throw IOException("Cancelled")
+                }
+                call.response()
+            }
+        }))
+        val caller = Job()
+        val attempt = TransportAttemptResources(transportClockMs() + 8_000)
+        val executor = Executors.newSingleThreadExecutor()
+        val domains = listOf("example.test")
+        val first = executor.submit<CfH2Pool.Channel?> {
+            pool.open(2, domains, epoch, attempt = attempt, callerIsActive = { caller.isActive })
+        }
+        try {
+            started.awaitChecked()
+            caller.cancel()
+            attempt.cancel()
+            finish.countDown()
+            assertNull(first.get(5, TimeUnit.SECONDS))
+            assertNotNull(pool.open(2, domains, epoch))
+            assertEquals(2, preflights.get())
+        } finally {
+            finish.countDown()
+            caller.cancel()
+            attempt.cancel()
+            pool.reset()
+            executor.shutdownNow()
+        }
+    }
+
+    @Test fun preflightTimeoutCoolsHostDownWhenCallerIsStillActive() {
+        val tracker = tracker()
+        val epoch = tracker.state.value.epoch
+        val preflights = AtomicInteger()
+        val caller = Job()
+        val attempt = TransportAttemptResources(transportClockMs() + 8_000)
+        val pool = CfH2Pool(tracker, CfH2Pool.Hooks(callFactory = { request ->
+            FakeCall(request) {
+                preflights.incrementAndGet()
+                attempt.cancel() // The H2 setup deadline, independent of the calling session.
+                throw SocketTimeoutException("Preflight timeout")
+            }
+        }))
+        try {
+            val domains = listOf("example.test")
+            assertNull(pool.open(2, domains, epoch, attempt = attempt, callerIsActive = { caller.isActive }))
+            assertTrue(caller.isActive)
+            assertNull(pool.open(2, domains, epoch))
+            assertEquals(1, preflights.get())
+        } finally {
+            caller.cancel()
+            pool.reset()
         }
     }
 

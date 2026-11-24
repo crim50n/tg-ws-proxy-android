@@ -133,15 +133,16 @@ internal class CfDnsResolver(callFactory: Call.Factory? = null) {
         hostname: String,
         connectivity: ConnectivityTracker? = null,
         epoch: Long = connectivity?.state?.value?.epoch ?: 0L,
+        attempt: TransportAttemptResources? = null,
     ): String? {
         val (startedGeneration, lock) = synchronized(stateLock) { generation to resolveLock }
-        fun isCurrent(): Boolean = (connectivity?.isCurrent(epoch) != false) &&
+        fun isCurrent(): Boolean = attempt?.isActive != false && (connectivity?.isCurrent(epoch) != false) &&
             synchronized(stateLock) { generation == startedGeneration }
         fun publish(requireInternet: Boolean = false, action: () -> Unit): Boolean {
             var published = false
             val guarded: () -> Unit = {
                 synchronized(stateLock) {
-                    if (generation == startedGeneration) {
+                    if (generation == startedGeneration && attempt?.isActive != false) {
                         action()
                         published = true
                     }
@@ -160,16 +161,22 @@ internal class CfDnsResolver(callFactory: Call.Factory? = null) {
                 outageCooldown.isBlocked()) return@synchronized null
             val encodedHost = URLEncoder.encode(hostname, Charsets.UTF_8.name())
             var resolverReachable = false
-            for (endpoint in endpoints) {
+            for ((index, endpoint) in endpoints.withIndex()) {
                 if (!isCurrent()) return@synchronized null
+                val timeout = attempt?.let {
+                    (it.remainingMs() / (endpoints.size - index)).coerceAtMost(3_000)
+                }
+                if (timeout != null && timeout <= 0) return@synchronized null
                 val request = Request.Builder()
                     .url("${endpoint.url}?name=$encodedHost&type=A")
                     .header("Accept", "application/dns-json")
                     .build()
                 val call = client.newCall(request)
+                if (timeout != null) call.timeout().timeout(timeout, TimeUnit.MILLISECONDS)
                 val cancellation = AutoCloseable { call.cancel() }
-                if (connectivity?.trackResource(epoch, cancellation) == false) return@synchronized null
+                attempt?.register(cancellation)
                 val answer = try {
+                    if (connectivity?.trackResource(epoch, cancellation) == false) return@synchronized null
                     runCatching {
                         call.execute().use { response ->
                             resolverReachable = true
@@ -179,6 +186,7 @@ internal class CfDnsResolver(callFactory: Call.Factory? = null) {
                     }.getOrNull()
                 } finally {
                     connectivity?.releaseResource(cancellation)
+                    attempt?.release(cancellation)
                 } ?: continue
                 val ttlMs = answer.ttlSeconds.coerceIn(60L, 3_600L) * 1_000L
                 if (!publish {

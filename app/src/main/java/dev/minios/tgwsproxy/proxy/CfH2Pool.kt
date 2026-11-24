@@ -22,6 +22,7 @@ import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import javax.net.SocketFactory
 import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
@@ -68,60 +69,107 @@ class CfH2Pool internal constructor(
     private data class Waiting(val capacity: Capacity, val bytes: Int)
     private val lanes = ConcurrentHashMap<String, Lane>()
     private val retryAfter = ConcurrentHashMap<String, Long>()
-    private val locks = ConcurrentHashMap<String, Any>()
+    private val locks = ConcurrentHashMap<String, ReentrantLock>()
+    private val stateLock = Any()
     private val generation = java.util.concurrent.atomic.AtomicLong()
     private val activeDomains = ConcurrentHashMap<Int, String>()
 
     fun reset() {
-        generation.incrementAndGet()
-        lanes.values.forEach(Lane::close)
-        lanes.clear()
-        retryAfter.clear()
-        locks.clear()
-        activeDomains.clear()
+        val retired = synchronized(stateLock) {
+            generation.incrementAndGet()
+            lanes.values.toList().also {
+                lanes.clear()
+                retryAfter.clear()
+                locks.clear()
+                activeDomains.clear()
+            }
+        }
+        retired.forEach(Lane::close)
     }
 
-    fun open(dc: Int, domains: List<String>, epoch: Long): Channel? {
+    internal fun open(
+        dc: Int,
+        domains: List<String>,
+        epoch: Long,
+        timeoutMs: Long = 8_000,
+        attempt: TransportAttemptResources? = null,
+        // The calling session, not the attempt's inner deadline: a genuine preflight
+        // timeout should still cool the host down while the session is running.
+        callerIsActive: () -> Boolean = { attempt?.isActive != false },
+        tlsAvailable: (String) -> Boolean = { true },
+    ): Channel? {
         if (dc !in MtProtoConstants.DC_IPS) return null
         val currentGeneration = generation.get()
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(8)
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+
+        fun isCurrent() = callerIsActive() && attempt?.isActive != false &&
+            generation.get() == currentGeneration && connectivity.isCurrent(epoch)
+
+        fun publish(requireInternet: Boolean = false, action: () -> Unit): Boolean {
+            var published = false
+            connectivity.recordIfCurrent(epoch, requireInternet) {
+                synchronized(stateLock) {
+                    if (generation.get() == currentGeneration && callerIsActive()) {
+                        action()
+                        published = true
+                    }
+                }
+            }
+            return published
+        }
+
         for (domain in domains.sortedBy { it != activeDomains[dc] }) {
-            if (!connectivity.isCurrent(epoch) || generation.get() != currentGeneration) return null
+            if (!isCurrent()) return null
             if (System.nanoTime() >= deadline) break
+            if (!tlsAvailable(domain)) continue
             val host = "kws${if (dc == 203) 2 else dc}.$domain"
             if ((retryAfter[host] ?: 0) > System.currentTimeMillis()) continue
-            synchronized(locks.getOrPut(host) { Any() }) {
-                var attemptedLane: Lane? = null
-                try {
-                    var lane = lanes[host]
-                    attemptedLane = lane
-                    if (lane == null || lane.epoch != epoch || lane.closed) {
-                        lane?.close()
-                        lane = Lane(host, epoch)
-                        attemptedLane = lane
-                        // Publish before preflight so reset cancels the setup call too.
-                        lanes[host] = lane
-                        lane.preflight(((deadline - System.nanoTime()) / 1_000_000).coerceAtLeast(1))
-                    }
-                    if (!connectivity.isCurrent(epoch) || generation.get() != currentGeneration) {
-                        lane.close()
-                        lanes.remove(host, lane)
-                        return null
-                    }
+            val lock = synchronized(stateLock) {
+                if (generation.get() != currentGeneration) return null
+                locks.computeIfAbsent(host) { ReentrantLock() }
+            }
+            if (!lock.tryLock()) continue // Do not queue behind another client's blocking preflight.
+            var created: Lane? = null
+            var ready = false
+            try {
+                if (!isCurrent()) return null
+                var lane = synchronized(stateLock) {
+                    if (generation.get() != currentGeneration) return null
+                    lanes[host]?.takeIf { it.epoch <= epoch }
+                }
+                if (lane == null || lane.epoch != epoch || lane.closed) {
+                    lane?.close()
+                    val newLane = Lane(host, epoch)
+                    created = newLane
+                    // Publish before preflight so reset cancels the setup call too.
+                    if (!isCurrent() || !publish { lanes[host] = newLane }) return null
+                    val remaining = (deadline - System.nanoTime()) / 1_000_000
+                    if (remaining <= 0) return null
+                    newLane.preflight(remaining, attempt)
+                    lane = newLane
+                }
+                if (!isCurrent() || !tlsAvailable(domain)) continue
+                if (!publish {
                     CfProxyDomains.setActiveDomain(dc, domain)
                     activeDomains[dc] = domain
-                    return Channel(lane, dc)
-                } catch (e: Exception) {
-                    attemptedLane?.let {
+                }) return null
+                ready = true
+                return Channel(lane, dc)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                if (publish(requireInternet = true) {
+                    retryAfter[host] = System.currentTimeMillis() + 30_000
+                }) {
+                    DiagnosticLogger.warning("h2_setup_failed", "dc" to dc, "error" to cfTransportErrorForLog(e))
+                }
+            } finally {
+                try {
+                    if (!ready) created?.let {
                         lanes.remove(host, it)
                         it.close()
                     }
-                    if (generation.get() == currentGeneration) {
-                        connectivity.recordIfCurrent(epoch, requireInternet = true) {
-                            retryAfter[host] = System.currentTimeMillis() + 30_000
-                        }
-                        DiagnosticLogger.failure("h2_setup_failed", e, "dc" to dc)
-                    }
+                } finally {
+                    lock.unlock()
                 }
             }
         }
@@ -190,13 +238,23 @@ class CfH2Pool internal constructor(
 
         private fun newCall(request: Request): Call = hooks.callFactory?.invoke(request) ?: client.newCall(request)
 
-        fun preflight(timeoutMs: Long) {
+        internal fun preflight(timeoutMs: Long, attempt: TransportAttemptResources? = null) {
             val call = newCall(Request.Builder().url("https://$host/api").head().build())
             call.timeout().timeout(timeoutMs, TimeUnit.MILLISECONDS)
-            call.execute().use {
-                if (it.protocol != Protocol.HTTP_2 || !(it.isSuccessful || it.code == 405 || it.code == 501)) {
-                    throw IOException("H2 preflight failed")
+            val cancel = AutoCloseable(call::cancel)
+            attempt?.register(cancel)
+            try {
+                if (closed || !connectivity.trackResource(epoch, cancel)) {
+                    throw IOException("H2 network changed")
                 }
+                call.execute().use {
+                    if (it.protocol != Protocol.HTTP_2 || !(it.isSuccessful || it.code == 405 || it.code == 501)) {
+                        throw IOException("H2 preflight failed")
+                    }
+                }
+            } finally {
+                connectivity.releaseResource(cancel)
+                attempt?.release(cancel)
             }
         }
 

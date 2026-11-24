@@ -87,7 +87,9 @@ off. Android force-stop and battery restrictions can prevent background startup.
 
 ## Updates and Support
 
-Check for updates in **About**. In-app downloads are verified against the
+Check for updates in **About**. While the proxy is running, the app also posts a
+system notification for a new version if Android allows notifications.
+In-app downloads are verified against the
 published SHA-256 checksum, package identity, version, and installed signing
 certificate before Android asks you to confirm installation.
 
@@ -104,9 +106,10 @@ It runs locally but connects to remote endpoints. Telegram message encryption is
 separate from the proxy transport.
 
 Transport TLS certificate verification is intentionally disabled; do not treat
-it as an authenticated TLS channel. Direct TCP fallback and optional port-80
-Cloudflare connections add no TLS layer. Fake TLS disguises the local proxy
-handshake; it is not an additional encryption layer.
+it as an authenticated TLS channel. Direct TCP fallback and Cloudflare port-80
+connections add no TLS layer. After timeouts, Cloudflare and Workers can try
+port 80 automatically without changing the saved TLS preference. Fake TLS
+disguises the local proxy handshake; it is not an additional encryption layer.
 Keep the default local address unless you intend to share access: `0.0.0.0`
 listens on all IPv4 interfaces. Keep your proxy link and secret private.
 
