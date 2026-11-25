@@ -127,6 +127,9 @@
     <string name="settings_dynamic_color">Adaptive colors</string>
     <string name="settings_dynamic_color_desc">Use the device Material You palette</string>
     <string name="settings_support">Support and diagnostics</string>
+    <string name="settings_reset_title">Reset settings to defaults</string>
+    <string name="settings_reset_warning">Restores all settings, including appearance, and generates a new proxy secret. Add the new proxy link in Telegram. If the proxy is running, it will restart. Diagnostic logs are kept.</string>
+    <string name="settings_reset_confirm">Reset</string>
     <string name="power_profile_update_title">Power settings updated</string>
     <string name="power_profile_update_message">After the update, the app applied a more efficient power profile because all five settings still matched the previous defaults. Testing showed that this profile substantially reduces idle CPU and radio wakeups while keeping the proxy usable on most networks.\n\nChanged settings:\n• Keep device awake: off\n• Prepare WebSocket connections: off\n• WebSocket keepalive: 180 seconds\n• Route checks: off\n• Cloudflare domain updates: off\n\nIf at least one power setting differed from the previous defaults, the entire profile was preserved. You can change these options at any time in Settings → Power usage if your network needs a more persistent background connection.</string>
     <string name="understood">Understood</string>

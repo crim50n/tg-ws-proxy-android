@@ -419,12 +419,9 @@ class TgWsProxyServer(
                 }
                 ProxyStats.connectionsBad.incrementAndGet()
                 DiagnosticLogger.event("handshake_rejected", "total" to count)
-                // Drain connection (matching Python behavior to avoid connection reset)
-                try {
-                    val drainBuf = ByteArray(4096)
-                    clientSocket.soTimeout = 5_000
-                    while (input.read(drainBuf) > 0) { /* drain */ }
-                } catch (_: Exception) {}
+                // Drain raw bytes: the rejected payload no longer needs decoding,
+                // and a Fake TLS wrapper can read multiple records in one call.
+                drainRejectedHandshake(wireInput, clientSocket::setSoTimeout)
                 return
             }
 

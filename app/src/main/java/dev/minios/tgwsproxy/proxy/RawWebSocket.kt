@@ -207,8 +207,7 @@ class RawWebSocket private constructor(
             checkCurrent: () -> Unit = {},
         ): RawWebSocket {
             val domains = if (cfProxyDomain != null) {
-                val wsDc = if (dc == 203) 2 else dc
-                listOf("kws${wsDc}.$cfProxyDomain")
+                listOf(MtProtoConstants.cloudflareHost(dc, cfProxyDomain))
             } else {
                 MtProtoConstants.wsDomainsForDc(dc, isMedia)
             }
@@ -354,7 +353,11 @@ class RawWebSocket private constructor(
         timeoutMs: Long = RELAY_INIT_TIMEOUT_MS,
         checkCurrent: () -> Unit = {},
     ) {
-        boundedTransportAttempt(timeoutMs, closeOnFailure = AutoCloseable(::abort)) { attempt ->
+        boundedTransportAttempt(
+            timeoutMs,
+            closeOnFailure = AutoCloseable(::abort),
+            operation = TransportOperation.RELAY_INIT,
+        ) { attempt ->
             if (!attempt.isActive) throw CancellationException("WebSocket relay init cancelled")
             checkCurrent()
             sendBinary(data)

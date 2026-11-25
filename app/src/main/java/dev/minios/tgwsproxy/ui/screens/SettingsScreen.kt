@@ -74,6 +74,7 @@ fun SettingsScreen(
     var appTheme by remember { mutableStateOf(config.appTheme) }
     var dynamicColor by remember { mutableStateOf(config.dynamicColor) }
     var regenerateSecretDialogVisible by rememberSaveable { mutableStateOf(false) }
+    var resetSettingsDialogVisible by rememberSaveable { mutableStateOf(false) }
 
     // Validation error states.
     var hostError by remember { mutableStateOf<String?>(null) }
@@ -214,6 +215,27 @@ fun SettingsScreen(
         if (updated != null) onExit(updated)
     }
     BackHandler(onBack = finishSettings)
+
+    if (resetSettingsDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { resetSettingsDialogVisible = false },
+            title = { Text(stringResource(R.string.settings_reset_title)) },
+            text = { Text(stringResource(R.string.settings_reset_warning)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    resetSettingsDialogVisible = false
+                    onExit(ProxyConfig())
+                }) {
+                    Text(stringResource(R.string.settings_reset_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { resetSettingsDialogVisible = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
 
     if (regenerateSecretDialogVisible) {
         AlertDialog(
@@ -777,6 +799,14 @@ fun SettingsScreen(
                             modifier = Modifier.rotate(180f),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { resetSettingsDialogVisible = true },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Text(stringResource(R.string.settings_reset_title))
                     }
                 }
             }

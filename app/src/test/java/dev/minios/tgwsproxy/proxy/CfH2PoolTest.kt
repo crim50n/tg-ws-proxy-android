@@ -22,6 +22,23 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CfH2PoolTest {
+    @Test fun cloudflareH2PreflightUsesDc203RatherThanTheDirectAlias() {
+        val tracker = tracker()
+        val urls = mutableListOf<String>()
+        val pool = CfH2Pool(tracker, CfH2Pool.Hooks(callFactory = { request ->
+            urls += request.url.toString()
+            FakeCall(request)
+        }))
+        try {
+            val channel = pool.open(203, listOf("example.test"), tracker.state.value.epoch)
+            assertNotNull(channel)
+            channel?.close()
+            assertEquals(listOf("https://kws203.example.test/api"), urls)
+        } finally {
+            pool.reset()
+        }
+    }
+
     private fun tracker() = ConnectivityTracker().apply { updateNetwork(1, NetworkStatus.ONLINE) }
     private fun packet(id: Int, size: Int = 24): ByteArray = ByteArray(size) { 1 }.also {
         NativeHttpCodec.bytesLE(id).copyInto(it, 8)

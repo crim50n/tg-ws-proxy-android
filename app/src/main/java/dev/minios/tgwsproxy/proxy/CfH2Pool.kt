@@ -122,7 +122,7 @@ class CfH2Pool internal constructor(
             if (!isCurrent()) return null
             if (System.nanoTime() >= deadline) break
             if (!tlsAvailable(domain)) continue
-            val host = "kws${if (dc == 203) 2 else dc}.$domain"
+            val host = MtProtoConstants.cloudflareHost(dc, domain)
             if ((retryAfter[host] ?: 0) > System.currentTimeMillis()) continue
             val lock = synchronized(stateLock) {
                 if (generation.get() != currentGeneration) return null

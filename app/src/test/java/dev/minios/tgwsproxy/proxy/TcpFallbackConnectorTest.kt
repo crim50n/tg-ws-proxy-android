@@ -11,9 +11,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -65,6 +68,57 @@ class TcpFallbackConnectorTest {
         now += 30_000
         fail = false
         assertNotNull(connector.connect("127.0.0.1", 443, 1024, init))
+    }
+
+    @Test
+    fun tcpInitUsesAnIndependentSlotWhenDialsFillUpAfterConnect() = runBlocking {
+        val releaseDials = CountDownLatch(1)
+        val firstDialsStarted = CountDownLatch(15)
+        val tcpConnected = CompletableDeferred<Unit>()
+        val lastDialStarted = CountDownLatch(1)
+        val output = ByteArrayOutputStream()
+        val socket = TestSocket(onConnect = { tcpConnected.complete(Unit) }, output = output)
+        val firstDials = List(15) {
+            async(Dispatchers.Default) {
+                boundedTransportAttempt(15_000) {
+                    firstDialsStarted.countDown()
+                    check(releaseDials.await(10, TimeUnit.SECONDS))
+                }
+            }
+        }
+        val lastDial = async(Dispatchers.Default) {
+            tcpConnected.await()
+            withTimeout(12_000) {
+                while (true) {
+                    try {
+                        boundedTransportAttempt(12_000) {
+                            lastDialStarted.countDown()
+                            check(releaseDials.await(10, TimeUnit.SECONDS))
+                        }
+                        break
+                    } catch (_: TransportDialNotStarted) {
+                        // The TCP dial may still be returning its slot.
+                        delay(1)
+                    }
+                }
+            }
+        }
+        try {
+            assertTrue(firstDialsStarted.await(3, TimeUnit.SECONDS))
+            val connector = TcpFallbackConnector({ 0L }) { socket }
+            val connected = connector.connect("127.0.0.1", 443, 1024, init, isActive = {
+                if (tcpConnected.isCompleted) check(lastDialStarted.await(3, TimeUnit.SECONDS))
+                true
+            })
+            assertSame(socket, connected)
+            assertArrayEquals(init, output.toByteArray())
+            assertFalse(socket.isClosed)
+        } finally {
+            releaseDials.countDown()
+            if (tcpConnected.isCompleted) lastDial.join() else lastDial.cancelAndJoin()
+            firstDials.forEach { it.join() }
+            socket.close()
+        }
     }
 
     @Test

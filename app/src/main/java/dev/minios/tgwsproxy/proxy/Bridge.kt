@@ -309,7 +309,6 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         epoch: Long,
     ): UpstreamConnection {
         checkEpoch(epoch)
-        val attemptStartedAt = transportClockMs()
         val context = currentCoroutineContext()
         context.ensureActive()
         val mediaTag = if (isMedia) " media" else ""
@@ -372,7 +371,9 @@ class Bridge(private val connectivity: ConnectivityTracker) {
         context.ensureActive()
         checkEpoch(epoch)
         var pooledWs: RawWebSocket? = null
+        val poolStartedAt = transportClockMs()
         connectivity.recordIfCurrent(epoch) { if (!config.forceTestDc) pooledWs = pool?.get(dc, isMedia) }
+        val poolElapsedMs = transportClockMs() - poolStartedAt
         if (pooledWs != null) {
             val ready = pooledWs!!
             if (!context.isActive) {
@@ -390,7 +391,7 @@ class Bridge(private val connectivity: ConnectivityTracker) {
                     "dc" to dc,
                     "media" to isMedia,
                     "route" to "ws_pool",
-                    "elapsedMs" to transportClockMs() - attemptStartedAt,
+                    "elapsedMs" to poolElapsedMs,
                 )
                 record(epoch, dc, isMedia, TransportRoute.WEBSOCKET, RoutePhase.CONNECTED)
             }) { dispatchTransportCleanup(ready::abort); checkEpoch(epoch) }

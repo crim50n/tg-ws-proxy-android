@@ -77,7 +77,11 @@ internal class TcpFallbackConnector(
             synchronized(lock) {
                 if (connecting[endpoint] !== socket) throw IOException("TCP fallback reset")
             }
-            boundedTransportAttempt(relayInitTimeoutMs, closeOnFailure = closeSocket) { attempt ->
+            boundedTransportAttempt(
+                relayInitTimeoutMs,
+                closeOnFailure = closeSocket,
+                operation = TransportOperation.RELAY_INIT,
+            ) { attempt ->
                 checkActive(attempt)
                 transportStage("relay_init", onStage) {
                     socket.getOutputStream().apply {

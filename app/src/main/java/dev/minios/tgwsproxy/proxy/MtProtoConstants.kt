@@ -51,6 +51,9 @@ object MtProtoConstants {
     )
 
     // WebSocket domains
+    // Flowseal v1.12.0 uses the actual DC number for Cloudflare WS and H2.
+    internal fun cloudflareHost(dc: Int, baseDomain: String): String = "kws$dc.$baseDomain"
+
     fun wsDomainsForDc(dc: Int, isMedia: Boolean): List<String> {
         val wsDc = if (dc == 203) 2 else dc
         return if (isMedia) {

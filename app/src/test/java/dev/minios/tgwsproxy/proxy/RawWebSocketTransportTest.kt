@@ -9,6 +9,7 @@ import java.util.Base64
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLSocket
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -18,6 +19,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RawWebSocketTransportTest {
+    @Test fun cloudflareWebSocketUsesDc203RatherThanTheDirectAlias() {
+        var queriedHost: String? = null
+        assertThrows(CancellationException::class.java) {
+            RawWebSocket.connectToDc(203, isMedia = false, targetIp = "127.0.0.1",
+                cfProxyDomain = "example.test", cachedCfAddress = {
+                    queriedHost = it
+                    throw CancellationException("Stop before network I/O")
+                })
+        }
+        assertEquals("kws203.example.test", queriedHost)
+    }
+
     private fun responseThatStalls(prefix: String, beforeTimeout: () -> Unit = {}): InputStream {
         val bytes = prefix.byteInputStream(Charsets.US_ASCII)
         return object : InputStream() {

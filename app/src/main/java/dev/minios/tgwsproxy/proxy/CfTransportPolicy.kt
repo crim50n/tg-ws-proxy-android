@@ -169,10 +169,18 @@ internal class CfTransportPolicy(
 }
 
 private const val MAX_BLOCKING_TRANSPORT_OPERATIONS = 16
+internal enum class TransportOperation { DIAL, RELAY_INIT }
+
 // Stuck system lookups may keep worker threads, but never queue up more dials or occupy the
 // general I/O dispatcher. Cleanup must also be able to run while the dial workers are blocked.
-private val transportDialDispatcher = Dispatchers.IO.limitedParallelism(MAX_BLOCKING_TRANSPORT_OPERATIONS)
-private val transportDialCapacity = Semaphore(MAX_BLOCKING_TRANSPORT_OPERATIONS)
+private class TransportExecutor {
+    val dispatcher = Dispatchers.IO.limitedParallelism(MAX_BLOCKING_TRANSPORT_OPERATIONS)
+    val capacity = Semaphore(MAX_BLOCKING_TRANSPORT_OPERATIONS)
+}
+
+private val transportDialExecutor = TransportExecutor()
+// Established sockets must be able to send relay init even if all dial slots are occupied.
+private val transportRelayInitExecutor = TransportExecutor()
 private val transportCleanupDispatcher = Dispatchers.IO.limitedParallelism(MAX_BLOCKING_TRANSPORT_OPERATIONS)
 
 internal fun dispatchTransportCleanup(cleanup: () -> Unit) {
@@ -201,8 +209,13 @@ internal suspend fun <T> boundedTransportAttempt(
     timeoutMs: Long,
     discard: (T) -> Unit = {},
     closeOnFailure: AutoCloseable? = null,
+    operation: TransportOperation = TransportOperation.DIAL,
     block: (TransportAttemptResources) -> T,
 ): T {
+    val executor = when (operation) {
+        TransportOperation.DIAL -> transportDialExecutor
+        TransportOperation.RELAY_INIT -> transportRelayInitExecutor
+    }
     val resources = TransportAttemptResources(transportClockMs() + timeoutMs)
     closeOnFailure?.let(resources::register)
     val started = AtomicBoolean()
@@ -211,12 +224,12 @@ internal suspend fun <T> boundedTransportAttempt(
         val completed = withTimeoutOrNull(timeoutMs) {
             suspendCancellableCoroutine<T> { continuation ->
                 continuation.invokeOnCancellation { resources.cancel() }
-                if (!transportDialCapacity.tryAcquire()) {
+                if (!executor.capacity.tryAcquire()) {
                     continuation.resumeWithException(TransportDialNotStarted())
                     return@suspendCancellableCoroutine
                 }
                 // Do not create a structured child that would have to join a stuck DNS lookup.
-                transportDialDispatcher.dispatch(EmptyCoroutineContext, Runnable {
+                executor.dispatcher.dispatch(EmptyCoroutineContext, Runnable {
                     try {
                         if (!continuation.isActive) return@Runnable
                         started.set(true)
@@ -227,7 +240,7 @@ internal suspend fun <T> boundedTransportAttempt(
                     } catch (e: Throwable) {
                         continuation.resumeWithException(e)
                     } finally {
-                        transportDialCapacity.release()
+                        executor.capacity.release()
                     }
                 })
             }.let {
